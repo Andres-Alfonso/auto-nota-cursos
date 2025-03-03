@@ -9,6 +9,16 @@ import { Club } from './entities/club.entity';
 import { ExcelRowDto } from './dto/excel-row.dto';
 import { unlink } from 'fs/promises';
 import { GeneralProgressVideoRoom } from './entities/general-progress-videoroom.entity';
+import { Content } from './entities/content.entity';
+import { UserProgressVideoRoom } from './entities/user-progress-videoroom.entity';
+import { UserProgressTaskVideoRoom } from './entities/user-pogress-task-videoroom.entity';
+import { UserProgressEvaluationVideoRoom } from './entities/user-progress-evaluation-videoroom.entity';
+import { DetailWallsVideoRoom } from './entities/detail-walls-videoroom.entity';
+import { UserProgressForumVideoRoom } from './entities/user-progress-wall-videoroom.entity';
+import { DetailActivitiesVideoRoom } from './entities/detail-activity-videoroom.entity';
+import { UserProgressActivityVideoRoom } from './entities/user-progress-activity-videoroom.entity';
+import { DetailSelftEvaluationVideoRoom } from './entities/detail-selft-evaluation-videoroom.entity';
+import { UserProgressSelftEvaluationVideoRoom } from './entities/user-progress-selft-evaluation.entity';
 
 @Injectable()
 export class ProgressService {
@@ -21,6 +31,26 @@ export class ProgressService {
         private videoRoomRepository: Repository<VideoRoom>,
         @InjectRepository(GeneralProgressVideoRoom)
         private generalProgressVideoroomsRepository: Repository<GeneralProgressVideoRoom>,
+        @InjectRepository(Content)
+        private contentRepository: Repository<Content>,
+        @InjectRepository(UserProgressVideoRoom)
+        private userProgressVideoroomRepository: Repository<UserProgressVideoRoom>,
+        @InjectRepository(UserProgressTaskVideoRoom)
+        private userProgressTaskVideoroomRepository: Repository<UserProgressTaskVideoRoom>,
+        @InjectRepository(UserProgressForumVideoRoom)
+        private userProgressForumVideoRoomRepository: Repository<UserProgressForumVideoRoom>,
+        @InjectRepository(UserProgressActivityVideoRoom)
+        private userProgressActivityVideoRoomRepository: Repository<UserProgressActivityVideoRoom>,
+        @InjectRepository(UserProgressEvaluationVideoRoom)
+        private userProgressEvaluationVideoRoomRepository: Repository<UserProgressEvaluationVideoRoom>,
+        @InjectRepository(UserProgressSelftEvaluationVideoRoom)
+        private userProgressSelftEvaluationVideoRoomRepository: Repository<UserProgressSelftEvaluationVideoRoom>,
+        @InjectRepository(DetailActivitiesVideoRoom)
+        private detailActivitiesVideoRoomRepository: Repository<DetailActivitiesVideoRoom>,
+        @InjectRepository(DetailSelftEvaluationVideoRoom)
+        private detailSelftEvaluationVideoRoomRepository: Repository<DetailSelftEvaluationVideoRoom>,
+        @InjectRepository(DetailWallsVideoRoom)
+        private detailWallsVideoRoomRepository: Repository<DetailWallsVideoRoom>,
         @InjectRepository(Club)
         private clubRepository: Repository<Club>,
         private dataSource: DataSource,
@@ -127,13 +157,37 @@ export class ProgressService {
                             `, [videoRoom.id]);
 
                             // Actualizar progreso para cada contenido
-                            for (const content of videoRoomContents) {
-                                await manager.query(`
-                                INSERT INTO user_pogress_video_rooms (id_user, id_videoroom, id_content, porcen)
-                                VALUES (?, ?, ?, 100)
-                                ON DUPLICATE KEY UPDATE porcen = 100
-                                `, [user.id, videoRoom.id, content.content_id]);
+                            for (const content of videoRoomContents){
+                                const existingProgressVideoroom = await this.userProgressVideoroomRepository.findOne({
+                                    where: { id_content: content.id, id_user: user.id, id_videoroom: videoRoom.id},
+                                });
+
+                                if (existingProgressVideoroom) {
+                                    // Actualizar el registro existente
+                                    existingProgressVideoroom.porcen = 100;
+                                    existingProgressVideoroom.updated_at = lastProgressDate;
+                                    await this.userProgressVideoroomRepository.save(existingProgressVideoroom);
+                                } else {
+                                    // Crear un nuevo registro
+                                    await this.userProgressVideoroomRepository.save({
+                                        porcen: 100,
+                                        id_user: user.id,
+                                        id_videoroom: videoRoom.id,
+                                        id_content: content.id,
+                                        created_at: firstProgressDate,
+                                        updated_at: lastProgressDate,
+                                    });
+                                }
                             }
+
+                            // Actualizar progreso para cada contenido
+                            // for (const content of videoRoomContents) {
+                            //     await manager.query(`
+                            //     INSERT INTO user_pogress_video_rooms (id_user, id_videoroom, id_content, porcen)
+                            //     VALUES (?, ?, ?, 100)
+                            //     ON DUPLICATE KEY UPDATE porcen = 100
+                            //     `, [user.id, videoRoom.id, content.content_id]);
+                            // }
 
                             // Obtener detalles de las tareas asociadas al videoroom
                             const taskDetails = await manager.query(`
@@ -141,19 +195,150 @@ export class ProgressService {
                                 `, [videoRoom.id]);
 
                             // Actualizar progreso para cada tarea
-                            for (const task of taskDetails) {
-                                await manager.query(`
-                                    INSERT INTO user_pogress_task_videorooms (id_user, id_videoroom, id_task, porcen)
-                                    VALUES (?, ?, ?, 100)
-                                    ON DUPLICATE KEY UPDATE porcen = 100
-                                    `, [user.id, videoRoom.id, task.tasks_id]);
+                            for (const task of taskDetails){
+                                const existingProgressTaskVideoroom = await this.userProgressTaskVideoroomRepository.findOne({
+                                    where: { id_task: task.tasks_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                });
+
+                                if (existingProgressTaskVideoroom) {
+                                    // Actualizar el registro existente
+                                    existingProgressTaskVideoroom.porcen = 100;
+                                    existingProgressTaskVideoroom.updated_at = lastProgressDate;
+                                    await this.userProgressTaskVideoroomRepository.save(existingProgressTaskVideoroom);
+                                } else {
+                                    // Crear un nuevo registro
+                                    await this.userProgressTaskVideoroomRepository.save({
+                                        porcen: 100,
+                                        id_user: user.id,
+                                        id_videoroom: videoRoom.id,
+                                        id_task: task.tasks_id,
+                                        created_at: firstProgressDate,
+                                        updated_at: lastProgressDate,
+                                    });
+                                }
                             }
+
+                            // Actualziar o crear progreso para cada muro
+                            const wallsDetails = await this.detailWallsVideoRoomRepository.find({
+                                where: { videorooms_id: videoRoom.id },
+                            });
+                              
+                            for (const wall of wallsDetails){
+                                const existingProgressWallVideoroom = await this.userProgressForumVideoRoomRepository.findOne({
+                                    where: { id_advertisements: wall.advertisements_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                });
+
+                                if (existingProgressWallVideoroom) {
+                                    // Actualizar el registro existente
+                                    existingProgressWallVideoroom.porcen = 100;
+                                    existingProgressWallVideoroom.updated_at = lastProgressDate;
+                                    await this.userProgressForumVideoRoomRepository.save(existingProgressWallVideoroom);
+                                } else {
+                                    // Crear un nuevo registro
+                                    await this.userProgressForumVideoRoomRepository.save({
+                                        porcen: 100,
+                                        id_user: user.id,
+                                        id_videoroom: videoRoom.id,
+                                        id_advertisements: wall.advertisements_id,
+                                        created_at: firstProgressDate,
+                                        updated_at: lastProgressDate,
+                                    });
+                                }
+                            }
+
+                            // Actualziar o crear progreso para cada actividad
+                            const activityDetails = await this.detailActivitiesVideoRoomRepository.find({
+                                where: { id_videoroom: videoRoom.id },
+                            });
+                              
+                            for (const activity of activityDetails){
+                                const existingProgressActivitesVideoroom = await this.userProgressActivityVideoRoomRepository.findOne({
+                                    where: { id_activity: activity.id_activities, id_user: user.id, id_videoroom: videoRoom.id},
+                                });
+
+                                if (existingProgressActivitesVideoroom) {
+                                    // Actualizar el registro existente
+                                    existingProgressActivitesVideoroom.porcen = 100;
+                                    existingProgressActivitesVideoroom.updated_at = lastProgressDate;
+                                    await this.userProgressForumVideoRoomRepository.save(existingProgressActivitesVideoroom);
+                                } else {
+                                    // Crear un nuevo registro
+                                    await this.userProgressForumVideoRoomRepository.save({
+                                        porcen: 100,
+                                        id_user: user.id,
+                                        id_videoroom: videoRoom.id,
+                                        id_advertisements: activity.id_activities,
+                                        created_at: firstProgressDate,
+                                        updated_at: lastProgressDate,
+                                    });
+                                }
+                            }
+
+                            // Actualziar o crear progreso para cada autoevaluacion
+                            const selftEvaluationDetails = await this.detailSelftEvaluationVideoRoomRepository.find({
+                                where: { id_videoroom: videoRoom.id },
+                            });
+                              
+                            for (const selftEvaluation of selftEvaluationDetails){
+                                const existingProgressSelftEvaluationVideoroom = await this.userProgressSelftEvaluationVideoRoomRepository.findOne({
+                                    where: { selft_evaluations_id: selftEvaluation.selft_evaluations_id, user_id: user.id, id_videoroom: videoRoom.id},
+                                });
+
+                                if (existingProgressSelftEvaluationVideoroom) {
+                                    // Actualizar el registro existente
+                                    existingProgressSelftEvaluationVideoroom.porcen = 100;
+                                    existingProgressSelftEvaluationVideoroom.updated_at = lastProgressDate;
+                                    await this.userProgressSelftEvaluationVideoRoomRepository.save(existingProgressSelftEvaluationVideoroom);
+                                } else {
+                                    // Crear un nuevo registro
+                                    await this.userProgressSelftEvaluationVideoRoomRepository.save({
+                                        porcen: 100,
+                                        id_user: user.id,
+                                        id_videoroom: videoRoom.id,
+                                        id_advertisements: selftEvaluation.selft_evaluations_id,
+                                        created_at: firstProgressDate,
+                                        updated_at: lastProgressDate,
+                                    });
+                                }
+                            }
+
+                            // Actualizar progreso para cada tarea
+                            // for (const task of taskDetails) {
+                            //     await manager.query(`
+                            //         INSERT INTO user_pogress_task_videorooms (id_user, id_videoroom, id_task, porcen)
+                            //         VALUES (?, ?, ?, 100)
+                            //         ON DUPLICATE KEY UPDATE porcen = 100
+                            //         `, [user.id, videoRoom.id, task.tasks_id]);
+                            // }
+
+                            // // Procesar cada evaluacion
+                            // for (const evalDetail of evaluationDetails){
+                            //     const existingProgressEvaluationVideoroom = await this.userProgressEvaluationVideoRoomRepository.findOne({
+                            //         where: { id_evaluation: evalDetail.id, id_user: user.id, id_videoroom: videoRoom.id},
+                            //     });
+
+                            //     if (existingProgressEvaluationVideoroom) {
+                            //         // Actualizar el registro existente
+                            //         existingProgressEvaluationVideoroom.porcen = 100;
+                            //         existingProgressEvaluationVideoroom.updated_at = lastProgressDate;
+                            //         await this.userProgressEvaluationVideoRoomRepository.save(existingProgressEvaluationVideoroom);
+                            //     } else {
+                            //         // Crear un nuevo registro
+                            //         await this.userProgressEvaluationVideoRoomRepository.save({
+                            //             porcen: 100,
+                            //             id_user: user.id,
+                            //             id_videoroom: videoRoom.id,
+                            //             id_evaluation: evalDetail.id,
+                            //             created_at: firstProgressDate,
+                            //             updated_at: lastProgressDate,
+                            //         });
+                            //     }
+                            // }
 
                             // Obtener detalles de evaluación
                             const evaluationDetails = await manager.query(`
-                                    SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
-                                `, [videoRoom.id]);
-
+                                SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
+                            `, [videoRoom.id]);
 
                             // Procesar cada evaluación
                             for (const evalDetail of evaluationDetails) {
