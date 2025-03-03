@@ -1,9 +1,13 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { ProgressUsersService } from './progress-users.service';
 import { CreateProgressUserDto } from './dto/create-progress-user.dto';
 import { UpdateProgressUserDto } from './dto/update-progress-user.dto';
+import { UploadProgressDto } from './dto/upload-progress.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 
-@Controller('progress-users')
+@Controller('progress')
 export class ProgressUsersController {
   constructor(private readonly progressUsersService: ProgressUsersService) {}
 

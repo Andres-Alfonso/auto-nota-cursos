@@ -1,24 +1,24 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { ProgressUsersModule } from './progress-users/progress-users.module';
+import { ProgressController } from './progress-users/progress.controller';
+import { ProgressService } from './progress-users/progress.service';
+import { ProgressModule } from './progress-users/progress.module';
 
 @Module({
   imports: [
-    ProgressUsersModule,
+    ProgressModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: '192.168.0.102',
+      host: '',
       port: 3307,
-      username: 'desarrollo',
-      password: 'vBUKqppYNWsA7R',
-      database: 'devel-myzonego',
+      username: '',
+      password: '',
+      database: '',
       autoLoadEntities: true,
       synchronize: false,
     })
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}
