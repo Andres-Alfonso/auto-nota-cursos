@@ -69,8 +69,6 @@ export class ProgressService {
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
 
-            console.log(rows);
-
             let successCount = 0;
             let errorCount = 0;
             let errors: { user: string; course: string; error: string }[] = [];
@@ -91,8 +89,6 @@ export class ProgressService {
                 const firstProgressDate = row['FECHA DE PRIMER AVANCE'];
                 const lastProgressDate = row['FECHA ULTIMO AVANCE'];
                 try {
-                    console.log(identification, email);
-
                     await this.dataSource.transaction(async (manager) => { // Uso de dataSource en lugar de entityManager
                         // Buscar usuario por identificación o correo
                         const user = await manager.getRepository(User).findOne({
@@ -250,7 +246,7 @@ export class ProgressService {
                             const activityDetails = await this.detailActivitiesVideoRoomRepository.find({
                                 where: { id_videoroom: videoRoom.id },
                             });
-                              
+  
                             for (const activity of activityDetails){
                                 const existingProgressActivitesVideoroom = await this.userProgressActivityVideoRoomRepository.findOne({
                                     where: { id_activity: activity.id_activities, id_user: user.id, id_videoroom: videoRoom.id},
@@ -260,14 +256,14 @@ export class ProgressService {
                                     // Actualizar el registro existente
                                     existingProgressActivitesVideoroom.porcen = 100;
                                     existingProgressActivitesVideoroom.updated_at = lastProgressDate;
-                                    await this.userProgressForumVideoRoomRepository.save(existingProgressActivitesVideoroom);
+                                    await this.userProgressActivityVideoRoomRepository.save(existingProgressActivitesVideoroom);
                                 } else {
                                     // Crear un nuevo registro
-                                    await this.userProgressForumVideoRoomRepository.save({
+                                    await this.userProgressActivityVideoRoomRepository.save({
                                         porcen: 100,
                                         id_user: user.id,
                                         id_videoroom: videoRoom.id,
-                                        id_advertisements: activity.id_activities,
+                                        id_activity: activity.id_activities,
                                         created_at: firstProgressDate,
                                         updated_at: lastProgressDate,
                                     });

@@ -10,10 +10,20 @@ import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { GeneralProgressVideoRoom } from './entities/general-progress-videoroom.entity';
+import { UserProgressVideoRoom } from './entities/user-progress-videoroom.entity';
+import { UserProgressTaskVideoRoom } from './entities/user-pogress-task-videoroom.entity';
+import { UserProgressForumVideoRoom } from './entities/user-progress-wall-videoroom.entity';
+import { UserProgressActivityVideoRoom } from './entities/user-progress-activity-videoroom.entity';
+import { UserProgressEvaluationVideoRoom } from './entities/user-progress-evaluation-videoroom.entity';
+import { UserProgressSelftEvaluationVideoRoom } from './entities/user-progress-selft-evaluation.entity';
+import { DetailActivitiesVideoRoom } from './entities/detail-activity-videoroom.entity';
+import { DetailSelftEvaluationVideoRoom } from './entities/detail-selft-evaluation-videoroom.entity';
+import { DetailWallsVideoRoom } from './entities/detail-walls-videoroom.entity';
+import { Content } from './entities/content.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom]),
+    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom, UserProgressVideoRoom, UserProgressTaskVideoRoom, UserProgressForumVideoRoom, UserProgressActivityVideoRoom, UserProgressEvaluationVideoRoom, UserProgressSelftEvaluationVideoRoom, DetailActivitiesVideoRoom, DetailSelftEvaluationVideoRoom, DetailWallsVideoRoom, Content]),
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',

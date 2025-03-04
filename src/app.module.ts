@@ -3,17 +3,23 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProgressController } from './progress-users/progress.controller';
 import { ProgressService } from './progress-users/progress.service';
 import { ProgressModule } from './progress-users/progress.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
+    // Importar y configurar ConfigModule
+    ConfigModule.forRoot({
+      isGlobal: true, // Disponible en toda la aplicación
+      envFilePath: '.env', // Ruta al archivo .env
+    }),
     ProgressModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: '',
-      port: 3307,
-      username: '',
-      password: '',
-      database: '',
+      host: process.env.DB_HOST,
+      port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 3307,
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       autoLoadEntities: true,
       synchronize: false,
     })
