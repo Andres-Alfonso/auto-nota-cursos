@@ -1,0 +1,75 @@
+/* Estilos personalizados adicionales para toda la aplicación */
+
+/* Estilos generales */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Estilos para enlaces */
+a {
+    transition: all 0.3s ease;
+}
+
+.active-link {
+    text-decoration: underline;
+    font-weight: bold;
+}
+
+/* Estilos para botones personalizados */
+.btn-custom {
+    background-color: #b45309;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.25rem;
+    transition: background-color 0.3s ease;
+}
+
+.btn-custom:hover {
+    background-color: #92400e;
+}
+
+/* Estilos para tarjetas */
+.card-custom {
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-custom:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* Animaciones */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+/* Estilos para formularios */
+.form-control {
+    border: 1px solid #e5e5e5;
+    padding: 0.5rem;
+    border-radius: 0.25rem;
+    width: 100%;
+    transition: border-color 0.3s ease;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #b45309;
+    box-shadow: 0 0 0 3px rgba(180, 83, 9, 0.2);
+}
+
+/* Utilidades adicionales */
+.text-custom-amber {
+    color: #b45309;
+}
+
+.bg-custom-amber {
+    background-color: #b45309;
+}

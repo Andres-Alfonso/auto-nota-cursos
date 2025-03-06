@@ -4,6 +4,7 @@ import { ProgressController } from './progress-users/progress.controller';
 import { ProgressService } from './progress-users/progress.service';
 import { ProgressModule } from './progress-users/progress.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       synchronize: false,
     })
   ],
-  controllers: [],
+  controllers: [AppController],
   providers: [],
 })
 export class AppModule {}

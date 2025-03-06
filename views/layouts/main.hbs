@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+    <!-- CSS Global -->
+    <link rel="stylesheet" href="/css/styles.css">
+    
+    <!-- CSS Específico de página (si existe) -->
+    {{#if pageCss}}
+    <link rel="stylesheet" href="/css/pages/{{pageCss}}.css">
+    {{/if}}
+    
+    <title>{{title}}</title>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <header class="bg-amber-700 text-white p-4 shadow-md">
+        <div class="container mx-auto">
+            <h1 class="text-2xl font-bold">Mi Aplicación NestJS</h1>
+            <nav class="mt-2">
+                <ul class="flex space-x-4">
+                    <li><a href="/ve" class="hover:underline">Inicio</a></li>
+                    <li><a href="/ve/about" class="hover:underline">Acerca de</a></li>
+                    <li><a href="/ve/contact" class="hover:underline">Contacto</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-4 mt-4">
+        {{{body}}}
+    </main>
+
+    <footer class="bg-gray-800 text-white p-4 mt-8">
+        <div class="container mx-auto text-center">
+            <p>&copy; {{currentYear}} Mi Aplicación NestJS</p>
+        </div>
+    </footer>
+</body>
+</html>
