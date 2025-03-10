@@ -423,11 +423,12 @@ export class ProgressService {
                 } catch (error) {
                     errorCount++;
                     errors.push({
-                        user: `${row['NUMERO DE IDENTIFICACION']} - ${row['CORREO']}`,
+                        user: `Columna NUMERO DE IDENTIFICACION: ${row['NUMERO DE IDENTIFICACION']} - Columna CORREO: ${row['CORREO']}`,
                         course: row['NOMBRE DEL CURSO'],
-                        error: error.message
+                        error: `Error ` + error.message
                     });
                     this.logger.error(`Error procesando fila: ${error.message}`);
+                    this.logger.error(`NUMERO DE IDENTIFICACION: ${row['NUMERO DE IDENTIFICACION']} - CORREO: ${row['CORREO']}`);
                 }
             }
 
