@@ -155,7 +155,7 @@ export class ProgressService {
                             // Actualizar progreso para cada contenido
                             for (const content of videoRoomContents){
                                 const existingProgressVideoroom = await this.userProgressVideoroomRepository.findOne({
-                                    where: { id_content: content.id, id_user: user.id, id_videoroom: videoRoom.id},
+                                    where: { id_content: content.content_id, id_user: user.id, id_videoroom: videoRoom.id},
                                 });
 
                                 if (existingProgressVideoroom) {
@@ -169,7 +169,7 @@ export class ProgressService {
                                         porcen: 100,
                                         id_user: user.id,
                                         id_videoroom: videoRoom.id,
-                                        id_content: content.id,
+                                        id_content: content.content_id,
                                         created_at: firstProgressDate,
                                         updated_at: lastProgressDate,
                                     });
@@ -338,12 +338,16 @@ export class ProgressService {
 
                             // Procesar cada evaluación
                             for (const evalDetail of evaluationDetails) {
+
+                                // Determinar la nota (100 por defecto o la proporcionada en el Excel)
+                                const nota = parseInt(row[indexMap['NOTA']], 10) || 100; // Default to 100 if parsing fails
+
                                 // Actualizar progreso de evaluación
                                 await manager.query(`
                                     INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen)
-                                    VALUES (?, ?, ?, 100)
-                                    ON DUPLICATE KEY UPDATE porcen = 100
-                                    `, [user.id, videoRoom.id, evalDetail.id_evaluation]);
+                                    VALUES (?, ?, ?, ?)
+                                    ON DUPLICATE KEY UPDATE porcen = ?
+                                    `, [user.id, videoRoom.id, evalDetail.id_evaluation, nota, nota]);
 
                                 // Obtener evaluación para verificar configuraciones
                                 const evaluation = await manager.query(`
@@ -360,9 +364,7 @@ export class ProgressService {
                                         `, [user.id, evalDetail.id_evaluation]);
 
                                     if (existingAttempts[0].count < maxAttempts) {
-                                        // Determinar la nota (100 por defecto o la proporcionada en el Excel)
-                                        const nota = row['NOTA'] || 100;
-
+                                        
                                         // Registrar en evaluation_user
                                         await manager.query(`
                                             INSERT INTO evaluation_users (user_id, evaluation_id, nota, approved, intentos)
@@ -428,7 +430,6 @@ export class ProgressService {
                         error: `Error ` + error.message
                     });
                     this.logger.error(`Error procesando fila: ${error.message}`);
-                    this.logger.error(`NUMERO DE IDENTIFICACION: ${row['NUMERO DE IDENTIFICACION']} - CORREO: ${row['CORREO']}`);
                 }
             }
 
