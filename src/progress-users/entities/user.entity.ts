@@ -1,4 +1,5 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { MeasurementTestAnswer } from '../../measurement-test/entities/measurement-test-answer.entity';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 
 @Entity('users')
 export class User {
@@ -19,4 +20,7 @@ export class User {
 
   @Column({ name: 'client_id' })
   client_id: number;
+
+  @OneToMany(() => MeasurementTestAnswer, (answer) => answer.user)
+  measurementTestAnswers: MeasurementTestAnswer[];
 }

@@ -5,6 +5,7 @@ import { ProgressService } from './progress-users/progress.service';
 import { ProgressModule } from './progress-users/progress.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
+import { MeasurementTestModule } from './measurement-test/measurement-test.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { AppController } from './app.controller';
       envFilePath: '.env', // Ruta al archivo .env
     }),
     ProgressModule,
+    MeasurementTestModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.DB_HOST,
@@ -23,7 +25,7 @@ import { AppController } from './app.controller';
       database: process.env.DB_DATABASE,
       autoLoadEntities: true,
       synchronize: false,
-    })
+    }),
   ],
   controllers: [AppController],
   providers: [],
