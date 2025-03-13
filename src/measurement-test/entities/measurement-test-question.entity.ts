@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, OneToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { MeasurementTestDimension } from './measurement-test-dimension.entity';
 import { MeasurementTestOption } from './measurement-test-option.entity';
 import { MeasurementTestAnswer } from './measurement-test-answer.entity';
@@ -9,12 +9,12 @@ export class MeasurementTestQuestion {
   id: number;
 
   @Column({ name: 'dimensions_measurement_id' })
-  dimensionsMeasurementId: number;
+  dimensions_measurement_id: number;
 
-  @Column()
+  @Column({ name: 'question' })
   question: string;
 
-  @Column()
+  @Column({ name: 'description' })
   description: string;
 
   @Column({ name: 'positive_recommendation' })
@@ -33,6 +33,7 @@ export class MeasurementTestQuestion {
   updatedAt: Date;
 
   @ManyToOne(() => MeasurementTestDimension, (dimension) => dimension.questions)
+  @JoinColumn({ name: 'dimensions_measurement_id' })
   dimension: MeasurementTestDimension;
 
   @OneToMany(() => MeasurementTestOption, (option) => option.question)

@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, OneToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { MeasurementTestQuestion } from './measurement-test-question.entity';
 import { MeasurementTestAnswer } from './measurement-test-answer.entity';
 
@@ -8,7 +8,7 @@ export class MeasurementTestOption {
   id: number;
 
   @Column({ name: 'question_measurement_id' })
-  questionMeasurementId: number;
+  question_measurement_id: number;
 
   @Column({ name: 'option_text' })
   optionText: string;
@@ -23,6 +23,7 @@ export class MeasurementTestOption {
   updatedAt: Date;
 
   @ManyToOne(() => MeasurementTestQuestion, (question) => question.options)
+  @JoinColumn({ name: 'question_measurement_id' })
   question: MeasurementTestQuestion;
 
   @OneToMany(() => MeasurementTestAnswer, (answer) => answer.option)

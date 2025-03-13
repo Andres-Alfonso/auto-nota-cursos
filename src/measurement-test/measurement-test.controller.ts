@@ -11,7 +11,6 @@ import { UploadMeasurement } from './dto/upload-measurement-dto';
 export class MeasurementTestController {
   constructor(private readonly measurementTestService: MeasurementTestService) {}
 
-
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
@@ -21,30 +20,5 @@ export class MeasurementTestController {
     // Aseguramos que clubId sea un número
     const measurement_id = parseInt(uploadMeasurementDto.measurement_id.toString(), 10);
     return this.measurementTestService.processExcelFile(file.path, measurement_id);
-  }
-
-  @Post()
-  create(@Body() createMeasurementTestDto: CreateMeasurementTestDto) {
-    return this.measurementTestService.create(createMeasurementTestDto);
-  }
-
-  @Get()
-  findAll() {
-    return this.measurementTestService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.measurementTestService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateMeasurementTestDto: UpdateMeasurementTestDto) {
-    return this.measurementTestService.update(+id, updateMeasurementTestDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.measurementTestService.remove(+id);
   }
 }
