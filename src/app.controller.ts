@@ -1,17 +1,43 @@
-import { Controller, Get, Render } from '@nestjs/common';
+import { Controller, Get, Render, Req, Query, Param } from '@nestjs/common';
 import { AppService } from './app.service';
+import { Request } from 'express';
 
 @Controller('ve')
 export class AppController {
-  // constructor(private readonly appService: AppService) {}
+  constructor(private readonly appService: AppService){}
 
   @Get()
   @Render('main/index')
-  root() {
+  async root(@Req() request: Request, @Query('client_id') clientId?: number) {
+    // Obtener el idioma de la solicitud (podrías implementar tu propia lógica aquí)
+    const locale = request.cookies?.locale || 'es'; // Asume que el idioma está en una cookie
+    
+    // Si se proporciona client_id, filtrar por ese cliente
+    const clubs = clientId 
+      ? await this.appService.findByClientId(clientId, locale)
+      : await this.appService.findAll(locale);
+    
     return { 
-      message: '¡Hola mundo!',
-      title: 'Página Principal',
-      pageCss: 'home'
+      message: '¡Homologar notas!',
+      title: 'Homologación Notas',
+      pageCss: 'home',
+      clubs: clubs // Pasar los datos a la vista
+    };
+  }
+
+  // También puedes agregar un endpoint específico para filtrar por client_id
+  @Get('by-client/:clientId')
+  @Render('main/index')
+  async byClient(@Param('clientId') clientId: number, @Req() request: Request) {
+    const locale = request.cookies?.locale || 'es';
+    const clubs = await this.appService.findByClientId(clientId, locale);
+    
+    return { 
+      message: '¡Homologar notas!',
+      title: 'Homologación Notas',
+      pageCss: 'home',
+      clubs: clubs,
+      clientId: clientId
     };
   }
   
