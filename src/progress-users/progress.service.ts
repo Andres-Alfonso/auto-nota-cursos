@@ -56,7 +56,7 @@ export class ProgressService {
         private dataSource: DataSource,
     ) { }
 
-    async processExcelFile(filePath: string, clubId: number): Promise<any> {
+    async processExcelFile(filePath: string, clubId: number, clientId?: number): Promise<any> {
         try {
             // Verificar que el club existe
             const club = await this.clubRepository.findOneBy({ id: clubId });
@@ -85,18 +85,27 @@ export class ProgressService {
 
                 const identification = row[indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toLowerCase().trim();
-                const clientId = parseInt(row[indexMap['Client']], 10);
+                const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
                 const firstProgressDate = row['FECHA DE PRIMER AVANCE'];
                 const lastProgressDate = row['FECHA ULTIMO AVANCE'];
                 try {
                     await this.dataSource.transaction(async (manager) => { // Uso de dataSource en lugar de entityManager
                         // Buscar usuario por identificación o correo
-                        const user = await manager.getRepository(User).findOne({
-                            where: [
-                                { identification: identification, client_id: clientId },
-                                { email: email, client_id: clientId }
-                            ]
-                        });
+                        const whereConditions: any[] = [];
+                        
+                        if (identification) {
+                            whereConditions.push({ identification: identification, client_id: userClientId });
+                        }
+                        
+                        if (email) {
+                            whereConditions.push({ email: email, client_id: userClientId });
+                        }
+                        
+                        if (whereConditions.length === 0) {
+                            throw new Error('Identificación o correo no proporcionados');
+                        }
+                        
+                        const user = await manager.getRepository(User).findOne({where: whereConditions});
 
                         console.log(user);
 

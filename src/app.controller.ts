@@ -9,7 +9,7 @@ export class AppController {
   @Get()
   @Render('main/index')
   async root(@Req() request: Request, @Query('client_id') clientId?: number) {
-    // Obtener el idioma de la solicitud (podrías implementar tu propia lógica aquí)
+    // Obtener el idioma de la solicitud
     const locale = request.cookies?.locale || 'es'; // Asume que el idioma está en una cookie
     
     // Si se proporciona client_id, filtrar por ese cliente
@@ -25,7 +25,7 @@ export class AppController {
     };
   }
 
-  // También puedes agregar un endpoint específico para filtrar por client_id
+  // se agrega un endpoint específico para filtrar por client_id
   @Get('by-client/:clientId')
   @Render('main/index')
   async byClient(@Param('clientId') clientId: number, @Req() request: Request) {

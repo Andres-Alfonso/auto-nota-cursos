@@ -18,7 +18,13 @@ export class ProgressController {
   ) {
     // Aseguramos que clubId sea un número
     const clubId = parseInt(uploadProgressDto.clubId.toString(), 10);
-    return this.progressService.processExcelFile(file.path, clubId);
+
+    // Pasamos clientId si está disponible
+    const clientId = uploadProgressDto.clientId 
+      ? parseInt(uploadProgressDto.clientId.toString(), 10) 
+      : undefined;
+
+    return this.progressService.processExcelFile(file.path, clubId, clientId);
   }
 
   @Post('upload/evaluation')

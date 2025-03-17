@@ -4,6 +4,8 @@
         <p class="text-gray-500 text-sm">Selecciona un curso y sube tu archivo Excel para actualizar el progreso o notas</p>
     </div>
 
+    {{> FormatFile}}
+
     <div class="border-b border-gray-200 mb-6"></div>
 
     {{#unless clientId}}
@@ -87,7 +89,7 @@
     </div>
 
     <div class="mt-4 justify-items-center">
-        <p class="text-gray-500">powered by <a class="active-link" href="https://windowschannel.com/">Windows channel</a></p>
+        <p class="text-gray-500">powered by <a class="active-link" href="https://windowschannel.com/">Windows Channel</a></p>
     </div>
 
     <div id="spinner" class="hidden flex justify-center items-center mt-6">
@@ -177,6 +179,13 @@
         const formData = new FormData();
         formData.append('file', file);
         formData.append('clubId', clubId);
+
+        // Añadir clientId si está disponible en la URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const clientId = urlParams.get('client_id');
+        if (clientId) {
+            formData.append('clientId', clientId);
+        }
 
         try {
             const response = await fetch('/api/v1/progress/upload', {
