@@ -1,6 +1,175 @@
 <section id="content-upload" class="bg-white mb-4 p-6 rounded-lg shadow-md max-w-lg mx-auto">
-    <h2 class="text-xl font-semibold mb-4">Formato de Archivo</h2>
+    <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-medium text-gray-700">Formato de Archivo</h3>
+        <button type="button" id="showFormatBtn" class="text-blue-500 hover:text-blue-700 text-sm font-medium flex items-center transition-colors">
+            <span>Ver formato</span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+        </button>
+    </div>
     
-    <img src="/img/format.png" alt="Formato de archivo" class="w-full h-auto mb-4 border rounded">
-    
+    <div id="formatContent" class="hidden">
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
+            <div class="relative overflow-hidden rounded hover:shadow-md transition-all duration-300">
+                <img src="/img/formato_carga_archivo.png" alt="Formato de archivo Excel" 
+                    class="w-full h-auto cursor-pointer border border-gray-100"
+                    onclick="openFormatModal(this)">
+                <div class="absolute bottom-2 right-2 bg-blue-500 bg-opacity-80 text-white p-1.5 rounded-full shadow">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+            </div>
+            <div class="mt-3 text-xs text-gray-500">
+                <p>• La primera fila debe contener los encabezados exactos como se muestra.</p>
+                <p>• Haga clic en la imagen para ver el formato completo.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Formato de Archivo -->
+    <div id="formatModal" class="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center hidden">
+        <div class="relative bg-white rounded-lg shadow-xl w-full max-w-4xl mx-4">
+            <div class="flex justify-between items-center p-4 border-b">
+                <h3 class="text-lg font-semibold text-gray-800">Formato de Archivo Excel</h3>
+                <button onclick="closeFormatModal()" class="text-gray-500 hover:text-gray-800 focus:outline-none">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="p-4 flex justify-center bg-gray-50">
+                <div id="formatImageContainer" class="relative">
+                    <img id="formatModalImage" class="max-w-full max-h-[70vh] object-contain" alt="Formato de archivo completo">
+                    
+                    <div class="absolute bottom-4 right-4 flex space-x-2">
+                        <button id="formatZoomOut" class="bg-white p-2 rounded-full shadow hover:bg-gray-100 focus:outline-none">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
+                            </svg>
+                        </button>
+                        <button id="formatZoomIn" class="bg-white p-2 rounded-full shadow hover:bg-gray-100 focus:outline-none">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t flex justify-between items-center">
+                <span id="formatZoomLevel" class="text-sm text-gray-500">Zoom: 100%</span>
+                <div class="flex space-x-4">
+                    <button onclick="resetFormatZoom()" class="text-blue-500 hover:text-blue-700 text-sm font-medium">
+                        Restablecer
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </section>
+
+<script>
+    // Mostrar/ocultar la sección de formato
+    document.addEventListener('DOMContentLoaded', function() {
+        const showFormatBtn = document.getElementById('showFormatBtn');
+        const formatContent = document.getElementById('formatContent');
+        
+        showFormatBtn.addEventListener('click', function() {
+            const isHidden = formatContent.classList.contains('hidden');
+            formatContent.classList.toggle('hidden');
+            
+            // Cambiar el ícono y texto del botón
+            showFormatBtn.innerHTML = isHidden 
+                ? '<span>Ocultar formato</span><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd" /></svg>'
+                : '<span>Ver formato</span><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>';
+        });
+    });
+
+    // Variables para el zoom
+    let formatCurrentZoom = 1;
+    const formatZoomStep = 0.25;
+    const formatMaxZoom = 3;
+    const formatMinZoom = 0.5;
+    
+    // Funciones del modal
+    function openFormatModal(img) {
+        const modal = document.getElementById('formatModal');
+        const modalImg = document.getElementById('formatModalImage');
+        modalImg.src = img.src;
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden'; // Prevenir scroll
+        resetFormatZoom();
+        
+        // Habilitar navegación por teclado
+        document.addEventListener('keydown', handleFormatKeyDown);
+    }
+
+    function closeFormatModal() {
+        document.getElementById('formatModal').classList.add('hidden');
+        document.body.style.overflow = ''; // Restaurar scroll
+        document.removeEventListener('keydown', handleFormatKeyDown);
+    }
+    
+    function handleFormatKeyDown(e) {
+        if (e.key === 'Escape') {
+            closeFormatModal();
+        } else if (e.key === '+' || e.key === '=') {
+            formatZoomIn();
+        } else if (e.key === '-') {
+            formatZoomOut();
+        }
+    }
+    
+    function updateFormatZoom() {
+        const modalImg = document.getElementById('formatModalImage');
+        const zoomLevel = document.getElementById('formatZoomLevel');
+        
+        modalImg.style.transform = `scale(${formatCurrentZoom})`;
+        zoomLevel.textContent = `Zoom: ${Math.round(formatCurrentZoom * 100)}%`;
+    }
+    
+    function formatZoomIn() {
+        if (formatCurrentZoom < formatMaxZoom) {
+            formatCurrentZoom += formatZoomStep;
+            updateFormatZoom();
+        }
+    }
+    
+    function formatZoomOut() {
+        if (formatCurrentZoom > formatMinZoom) {
+            formatCurrentZoom -= formatZoomStep;
+            updateFormatZoom();
+        }
+    }
+    
+    function resetFormatZoom() {
+        formatCurrentZoom = 1;
+        updateFormatZoom();
+    }
+    
+    // Configurar eventos cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+        // Zoom con botones
+        document.getElementById('formatZoomIn').addEventListener('click', formatZoomIn);
+        document.getElementById('formatZoomOut').addEventListener('click', formatZoomOut);
+        
+        // Cerrar al hacer clic fuera
+        const modal = document.getElementById('formatModal');
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                closeFormatModal();
+            }
+        });
+        
+        // Zoom con rueda del mouse
+        document.getElementById('formatImageContainer').addEventListener('wheel', function(e) {
+            e.preventDefault();
+            if (e.deltaY < 0) {
+                formatZoomIn();
+            } else {
+                formatZoomOut();
+            }
+        });
+    });
+</script>
