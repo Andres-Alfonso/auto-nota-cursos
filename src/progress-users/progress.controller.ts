@@ -16,8 +16,10 @@ export class ProgressController {
     @UploadedFile() file: Multer.File,
     @Body() uploadProgressDto: UploadProgressDto,
   ) {
-    // Aseguramos que clubId sea un número
-    const clubId = parseInt(uploadProgressDto.clubId.toString(), 10);
+    // Convertir clubId a número o pasar undefined si no existe
+    const clubId = uploadProgressDto.clubId ? 
+      parseInt(uploadProgressDto.clubId.toString(), 10) : 
+      undefined;
 
     // Pasamos clientId si está disponible
     const clientId = uploadProgressDto.clientId 
