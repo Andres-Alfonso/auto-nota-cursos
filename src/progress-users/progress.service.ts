@@ -66,6 +66,7 @@ export class ProgressService {
     
             let successCount = 0;
             let errorCount = 0;
+            let countCoursesNotFound = 0;
             let errors: { user: string; course: string; error: string }[] = [];
             let coursesNotFound: string[] = [];
     
@@ -237,6 +238,7 @@ export class ProgressService {
                                     this.logger.warn(`No se encontró ningún VideoRoom para el curso: ${courseName}`);
                                     if (!coursesNotFound.includes(courseName)) {
                                         coursesNotFound.push(courseName);
+                                        countCoursesNotFound++;
                                     }
                                     continue;
                                 }
@@ -501,10 +503,9 @@ export class ProgressService {
                                     }
                                 }
                             }
+                            successCount++;
                         }
                     });
-    
-                    successCount++;
                 } catch (error) {
                     errorCount++;
                     errors.push({
@@ -525,6 +526,7 @@ export class ProgressService {
                 success: successCount,
                 errors: errorCount,
                 errorDetails: errors,
+                countCoursesNotFound: countCoursesNotFound,
                 coursesNotFound: coursesNotFound // Incluir los cursos que no se encontraron
             };
         } catch (error) {
