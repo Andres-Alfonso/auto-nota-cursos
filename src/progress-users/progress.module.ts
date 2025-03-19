@@ -20,10 +20,13 @@ import { DetailActivitiesVideoRoom } from './entities/detail-activity-videoroom.
 import { DetailSelftEvaluationVideoRoom } from './entities/detail-selft-evaluation-videoroom.entity';
 import { DetailWallsVideoRoom } from './entities/detail-walls-videoroom.entity';
 import { Content } from './entities/content.entity';
+import { SectionClubs } from './entities/section-clubs.entity';
+import { DetailSectionClub } from './entities/detail-section-club.entity';
+import { ClubUser } from './entities/club-user.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom, UserProgressVideoRoom, UserProgressTaskVideoRoom, UserProgressForumVideoRoom, UserProgressActivityVideoRoom, UserProgressEvaluationVideoRoom, UserProgressSelftEvaluationVideoRoom, DetailActivitiesVideoRoom, DetailSelftEvaluationVideoRoom, DetailWallsVideoRoom, Content]),
+    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom, UserProgressVideoRoom, UserProgressTaskVideoRoom, UserProgressForumVideoRoom, UserProgressActivityVideoRoom, UserProgressEvaluationVideoRoom, UserProgressSelftEvaluationVideoRoom, DetailActivitiesVideoRoom, DetailSelftEvaluationVideoRoom, DetailWallsVideoRoom, Content, ClubUser]),
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',

@@ -1,7 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, OneToMany, ManyToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany, ManyToMany, ManyToOne, JoinColumn } from 'typeorm';
 import { VideoRoom } from './videoroom.entity';
 import { MeasurementTest } from '../../measurement-test/entities/measurement-test.entity';
 import { ClubTranslation } from './club_translations.entity';
+import { SectionClubs } from './section-clubs.entity';
+import { ClubUser } from './club-user.entity';
+import { EvaluationClub } from './evaluation-club.entity';
+
 
 @Entity('clubs')
 export class Club {
@@ -23,4 +27,14 @@ export class Club {
 
   @OneToMany(() => ClubTranslation, translation => translation.club)
   translations: ClubTranslation[];
+
+  @ManyToOne(() => SectionClubs, section => section.clubs)
+  @JoinColumn({ name: 'id_secction' })
+  section: SectionClubs;
+
+  @OneToMany(() => ClubUser, clubUser => clubUser.club)
+  clubUsers: ClubUser[];
+
+  @OneToMany(() => EvaluationClub, evaluationClub => evaluationClub.club)
+  evaluationClubs: EvaluationClub[];
 }

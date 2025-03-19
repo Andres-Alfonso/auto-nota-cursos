@@ -20,6 +20,7 @@ import { UserProgressActivityVideoRoom } from './entities/user-progress-activity
 import { DetailSelftEvaluationVideoRoom } from './entities/detail-selft-evaluation-videoroom.entity';
 import { UserProgressSelftEvaluationVideoRoom } from './entities/user-progress-selft-evaluation.entity';
 import { ClubTranslation } from './entities/club_translations.entity';
+import { ClubUser } from './entities/club-user.entity';
 
 @Injectable()
 export class ProgressService {
@@ -52,6 +53,8 @@ export class ProgressService {
         private detailSelftEvaluationVideoRoomRepository: Repository<DetailSelftEvaluationVideoRoom>,
         @InjectRepository(DetailWallsVideoRoom)
         private detailWallsVideoRoomRepository: Repository<DetailWallsVideoRoom>,
+        @InjectRepository(ClubUser)
+        private clubUserRepository: Repository<ClubUser>,
         @InjectRepository(Club)
         private clubRepository: Repository<Club>,
         private dataSource: DataSource,
@@ -66,9 +69,12 @@ export class ProgressService {
     
             let successCount = 0;
             let errorCount = 0;
+            let usersNotFoundCount = 0;
             let countCoursesNotFound = 0;
             let errors: { user: string; course: string; error: string }[] = [];
             let coursesNotFound: string[] = [];
+            let usersNotFound: string[] = [];
+            let usersAddedToClub = 0;
     
             const headers = rows.shift(); // Remueve la primera fila y la usa como encabezados
             const indexMap = headers.reduce((acc, header, index) => {
@@ -108,7 +114,7 @@ export class ProgressService {
     
             // Procesar cada fila en una transacción
             for (const row of rows) {
-                const identification = row[indexMap['CEDULA'] || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
+                const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
                 const firstProgressDate = new Date().toISOString();  // Si no hay fecha específica, usar la fecha actual
@@ -123,10 +129,11 @@ export class ProgressService {
                             whereConditions.push({ identification: identification, client_id: userClientId });
                         }
                         
-                        if (email) {
-                            whereConditions.push({ email: email, client_id: userClientId });
-                        }
+                        // if (email) {
+                        //     whereConditions.push({ email: email, client_id: userClientId });
+                        // }
                         
+                        console.log(whereConditions.length);
                         if (whereConditions.length === 0) {
                             throw new Error('Identificación o correo no proporcionados');
                         }
@@ -136,7 +143,10 @@ export class ProgressService {
                         console.log(user);
     
                         if (!user) {
-                            throw new Error(`Usuario no encontrado: ${identification || ''} / ${email || ''}`);
+                            usersNotFoundCount++;
+                            usersNotFound.push(`Identificación: ${identification || 'No proporcionada'} - Correo: ${email || 'No proporcionado'}`);
+                            this.logger.warn(`Usuario no encontrado: ${identification || ''} / ${email || ''}`);
+                            return; // Usar return en lugar de continue para salir de la transacción actual
                         }
     
                         // Procesar cada curso en la fila
@@ -156,23 +166,31 @@ export class ProgressService {
                             }
                             
                             // Verificar si está APROBADO
-                            if (courseValue.toUpperCase() !== 'APROBADO' && 
-                                !courseValue.toUpperCase().includes('APROB')) {
-                                this.logger.log(`Saltando curso ${courseColumn.name} porque no está APROBADO: ${courseValue}`);
-                                continue;
-                            }
-                            
-                            // Obtener la calificación
+                            // if (courseValue.toUpperCase() !== 'APROBADO' && 
+                            //     !courseValue.toUpperCase().includes('APROB')) {
+                            //     this.logger.log(`Saltando curso ${courseColumn.name} porque no está APROBADO: ${courseValue}`);
+                            //     continue;
+                            // }
+
                             const calificacionValue = row[courseColumn.calificacionIndex]?.toString().trim();
                             this.logger.log(`Calificación: ${calificacionValue}`);
                             
+                            // NUEVA LÓGICA: Verificar si está APROBADO y tiene calificación
+                            const isApproved = courseValue.toUpperCase() === 'APROBADO' || 
+                                            courseValue.toUpperCase().includes('APROB');
+                            const hasCalificacion = !!calificacionValue;
+                            
+                            // Si no está aprobado o no tiene calificación, saltar este curso
+                            if (!isApproved || !hasCalificacion) {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque no está aprobado o no tiene calificación. Aprobado: ${isApproved}, Tiene calificación: ${hasCalificacion}`);
+                                continue;
+                            }
+                            
                             // Convertir calificación a número
                             let notaCalificacion = 100; // Valor por defecto
-                            if (calificacionValue) {
-                                const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
-                                if (numMatch) {
-                                    notaCalificacion = parseFloat(numMatch[0]);
-                                }
+                            const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
+                            if (numMatch) {
+                                notaCalificacion = parseFloat(numMatch[0]);
                             }
 
                             this.logger.log(`Nota calificación procesada: ${notaCalificacion}`);
@@ -188,8 +206,12 @@ export class ProgressService {
                             
                             // Buscar videoroom por nombre del curso
                             let videoRooms: VideoRoom[] = [];
+                            let currentClubId: number | null = null;
                             
                             if (clubId) {
+                                // Si se proporciona clubId, buscar todos los videorooms de ese club
+                                currentClubId = clubId;
+
                                 // Si se proporciona clubId, buscar todos los videorooms de ese club
                                 videoRooms = await manager.getRepository(VideoRoom).find({
                                     where: { club_id: clubId },
@@ -213,6 +235,7 @@ export class ProgressService {
                                 
                                 // Si hay coincidencia exacta
                                 if (clubTranslation) {
+                                    currentClubId = clubTranslation.club_id;
                                     videoRooms = await manager.getRepository(VideoRoom).find({
                                         where: { club_id: clubTranslation.club_id },
                                         relations: ['club']
@@ -226,6 +249,7 @@ export class ProgressService {
                                     `, [`%${courseName}%`]);
                                     
                                     if (partialMatches && partialMatches.length > 0) {
+                                        currentClubId = partialMatches[0].club_id;
                                         videoRooms = await manager.getRepository(VideoRoom).find({
                                             where: { club_id: partialMatches[0].club_id },
                                             relations: ['club']
@@ -241,6 +265,34 @@ export class ProgressService {
                                         countCoursesNotFound++;
                                     }
                                     continue;
+                                }
+                            }
+
+                            // VALIDACIÓN ACTUALIZADA: 
+                            // Ya verificamos que el curso está aprobado y tiene calificación
+                            // Ahora verificamos si el usuario ya está registrado en el club
+                            if (currentClubId) {
+                                const existingClubUser = await manager.getRepository(ClubUser).findOne({
+                                    where: {
+                                        club_id: currentClubId,
+                                        user_id: user.id
+                                    }
+                                });
+                                
+                                // Si el usuario no está registrado en el club, agregarlo
+                                if (!existingClubUser) {
+                                    this.logger.log(`Agregando usuario ID ${user.id} al club ID ${currentClubId} (curso aprobado con calificación: ${calificacionValue})`);
+                                    
+                                    const newClubUser = new ClubUser();
+                                    newClubUser.club_id = currentClubId;
+                                    newClubUser.user_id = user.id;
+                                    
+                                    await manager.getRepository(ClubUser).save(newClubUser);
+                                    usersAddedToClub++;
+                                    
+                                    this.logger.log(`Usuario ID ${user.id} agregado exitosamente al club ID ${currentClubId}`);
+                                } else {
+                                    this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
                                 }
                             }
 
@@ -527,7 +579,8 @@ export class ProgressService {
                 errors: errorCount,
                 errorDetails: errors,
                 countCoursesNotFound: countCoursesNotFound,
-                coursesNotFound: coursesNotFound // Incluir los cursos que no se encontraron
+                coursesNotFound: coursesNotFound, // Incluir los cursos que no se encontraron
+                usersAddedToClub
             };
         } catch (error) {
             this.logger.error(`Error procesando archivo: ${error.message}`);
