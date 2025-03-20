@@ -23,10 +23,16 @@ import { Content } from './entities/content.entity';
 import { SectionClubs } from './entities/section-clubs.entity';
 import { DetailSectionClub } from './entities/detail-section-club.entity';
 import { ClubUser } from './entities/club-user.entity';
+import { DetailUserSectionsClub } from './entities/detail-user-sections-club.entity';
+import { EvaluationClub } from './entities/evaluation-club.entity';
+import { Evaluation } from './entities/evaluation.entity';
+import { Certificate } from './entities/certificate.entity';
+import { EvaluationUser } from './entities/evaluation-user.entity';
+import { Answer } from './entities/answer.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom, UserProgressVideoRoom, UserProgressTaskVideoRoom, UserProgressForumVideoRoom, UserProgressActivityVideoRoom, UserProgressEvaluationVideoRoom, UserProgressSelftEvaluationVideoRoom, DetailActivitiesVideoRoom, DetailSelftEvaluationVideoRoom, DetailWallsVideoRoom, Content, ClubUser]),
+    TypeOrmModule.forFeature([User, VideoRoom, Club, GeneralProgressVideoRoom, UserProgressVideoRoom, UserProgressTaskVideoRoom, UserProgressForumVideoRoom, UserProgressActivityVideoRoom, UserProgressEvaluationVideoRoom, UserProgressSelftEvaluationVideoRoom, DetailActivitiesVideoRoom, DetailSelftEvaluationVideoRoom, DetailWallsVideoRoom, Content, ClubUser, SectionClubs, DetailSectionClub, DetailUserSectionsClub, EvaluationClub, Evaluation, Certificate, EvaluationUser, Answer]),
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',
