@@ -75,6 +75,7 @@ export class ProgressService {
             let coursesNotFound: string[] = [];
             let usersNotFound: string[] = [];
             let usersAddedToClub = 0;
+            let rowIndex = 1;
     
             const headers = rows.shift(); // Remueve la primera fila y la usa como encabezados
             const indexMap = headers.reduce((acc, header, index) => {
@@ -114,6 +115,7 @@ export class ProgressService {
     
             // Procesar cada fila en una transacción
             for (const row of rows) {
+                this.logger.warn(`Procesando fila ${rowIndex}...`);
                 const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
@@ -553,6 +555,224 @@ export class ProgressService {
                                             }
                                         }
                                     }
+                                }
+                            }
+                            successCount++;
+                        }
+                    });
+                } catch (error) {
+                    errorCount++;
+                    errors.push({
+                        user: `Identificación: ${identification || 'No proporcionada'} - Correo: ${email || 'No proporcionado'}`,
+                        course: 'Múltiples cursos',
+                        error: `Error: ${error.message}`
+                    });
+                    this.logger.error(`Error en fila ${rowIndex}: ${error.message}`);
+                }
+                rowIndex++;
+            }
+    
+            // Eliminar archivo después de procesar
+            await unlink(filePath);
+    
+            return {
+                message: 'Proceso completado',
+                total: rows.length,
+                success: successCount,
+                errors: errorCount,
+                errorDetails: errors,
+                countCoursesNotFound: countCoursesNotFound,
+                coursesNotFound: coursesNotFound, // Incluir los cursos que no se encontraron
+                usersAddedToClub
+            };
+        } catch (error) {
+            this.logger.error(`Error procesando archivo: ${error.message}`);
+            throw new HttpException(
+                `Error al procesar el archivo: ${error.message}`,
+                HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
+    async clubUserExcelFile(filePath: string, clubId?: number, clientId?: number): Promise<any> {
+        try {
+            // Leer el archivo Excel
+            const workbook = XLSX.readFile(filePath);
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+    
+            let successCount = 0;
+            let errorCount = 0;
+            let usersNotFoundCount = 0;
+            let countCoursesNotFound = 0;
+            let errors: { user: string; course: string; error: string }[] = [];
+            let coursesNotFound: string[] = [];
+            let usersNotFound: string[] = [];
+            let usersAddedToClub = 0;
+    
+            const headers = rows.shift(); // Remueve la primera fila y la usa como encabezados
+            const indexMap = headers.reduce((acc, header, index) => {
+                acc[header.trim()] = index;
+                return acc;
+            }, {});
+    
+            // Identificar las columnas de cursos - son las que tienen "calificacion" en la siguiente columna
+            const courseColumns: any[] = [];
+            
+            for (let i = 0; i < headers.length; i++) {
+                const nextHeader = headers[i + 1];
+                if (nextHeader && 
+                    (nextHeader.toLowerCase().includes('calificacion') || 
+                    nextHeader.toLowerCase().includes('calificación'))) {
+                    courseColumns.push({
+                        index: i,
+                        name: headers[i].trim(),
+                        calificacionIndex: i + 1,
+                        fechaValidacionIndex: i + 2,
+                        duracionIndex: i + 3
+                    });
+                    
+                    this.logger.log(`Columna de curso detectada: ${headers[i].trim()} en índice ${i}`);
+                }
+            }
+            
+            if (courseColumns.length === 0) {
+                this.logger.error('No se pudieron encontrar columnas de cursos en el Excel');
+                throw new HttpException('No se pudieron identificar columnas de cursos en el Excel', HttpStatus.BAD_REQUEST);
+            }
+            
+            this.logger.warn(`Total de columnas de cursos detectadas: ${courseColumns.length}`);
+            for (const col of courseColumns) {
+                this.logger.log(`Curso: ${col.name}, índices: ${JSON.stringify(col)}`);
+            }
+    
+            // Procesar cada fila en una transacción
+            for (const row of rows) {
+                const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
+                const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
+                const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
+    
+                try {
+                    await this.dataSource.transaction(async (manager) => {
+                        // Buscar usuario por identificación o correo
+                        const whereConditions: any[] = [];
+                        
+                        if (identification) {
+                            whereConditions.push({ identification: identification, client_id: userClientId });
+                        }
+                        
+                        // if (email) {
+                        //     whereConditions.push({ email: email, client_id: userClientId });
+                        // }
+                        
+                        if (whereConditions.length === 0) {
+                            throw new Error('Identificación o correo no proporcionados');
+                        }
+                        
+                        const user = await manager.getRepository(User).findOne({where: whereConditions});
+    
+                        if (!user) {
+                            usersNotFoundCount++;
+                            usersNotFound.push(`Identificación: ${identification || 'No proporcionada'} - Correo: ${email || 'No proporcionado'}`);
+                            this.logger.warn(`Usuario no encontrado: ${identification || ''} / ${email || ''}`);
+                            return; // Usar return en lugar de continue para salir de la transacción actual
+                        }else{
+                            this.logger.warn(`--------------------------------------------------------------`);
+                            this.logger.warn(`Usuario encontrado: ${identification || ''} / ${email || ''}`);
+                            this.logger.warn(`--------------------------------------------------------------`);
+                        }
+
+
+    
+                        // Procesar cada curso en la fila
+                        for (const courseColumn of courseColumns) {
+                            // Mostrar información de debugging
+                            this.logger.log(`Procesando curso: ${courseColumn.name}`);
+                            
+                            // Obtener el valor del curso (APROBADO/NO APLICA)
+                            const courseValue = row[courseColumn.index]?.toString().trim();
+                            
+                            this.logger.log(`Valor del curso: ${courseValue}`);
+                            
+                            // Si es NO APLICA o está vacío, saltar este curso
+                            if (!courseValue || courseValue === 'NO APLICA') {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque es NO APLICA o vacío`);
+                                continue;
+                            }
+                            
+                            // Verificar si está APROBADO
+                            // if (courseValue.toUpperCase() !== 'APROBADO' && 
+                            //     !courseValue.toUpperCase().includes('APROB')) {
+                            //     this.logger.log(`Saltando curso ${courseColumn.name} porque no está APROBADO: ${courseValue}`);
+                            //     continue;
+                            // }
+                            
+                            // IMPORTANTE: El courseName ahora será el nombre de la columna, no el valor
+                            const courseName = courseColumn.name;
+                            
+                            // Buscar videoroom por nombre del curso
+                            let currentClubId: number | null = null;
+                            
+                            if (clubId) {
+                                // Si se proporciona clubId
+                                currentClubId = clubId;
+                            } else {
+                                // Primero intentar buscar coincidencia exacta del título del curso
+                                const clubTranslation = await manager.getRepository(ClubTranslation).findOne({
+                                    where: { title: courseName }
+                                });
+
+                                this.logger.log(`Busqueda id de curso: ${clubTranslation?.club_id}`);
+                                
+                                // Si hay coincidencia exacta
+                                if (clubTranslation) {
+                                    currentClubId = clubTranslation.club_id;
+                                } else {
+                                    // Usar LIKE para buscar coincidencias parciales
+                                    const partialMatches = await manager.query(`
+                                        SELECT * FROM club_translations 
+                                        WHERE title LIKE ? 
+                                        LIMIT 1
+                                    `, [`%${courseName}%`]);
+                                    
+                                    if (partialMatches && partialMatches.length > 0) {
+                                        currentClubId = partialMatches[0].club_id;
+                                    }
+                                }
+                            }
+
+                            if (!currentClubId) {
+                                countCoursesNotFound++;
+                                if (!coursesNotFound.includes(courseName)) {
+                                    coursesNotFound.push(courseName);
+                                }
+                                this.logger.warn(`Curso no encontrado: ${courseName}`);
+                                continue; // Saltar al siguiente curso
+                            }
+
+                            // Ahora verificamos si el usuario ya está registrado en el club
+                            if (currentClubId) {
+                                const existingClubUser = await manager.getRepository(ClubUser).findOne({
+                                    where: {
+                                        club_id: currentClubId,
+                                        user_id: user.id
+                                    }
+                                });
+                                
+                                // Si el usuario no está registrado en el club, agregarlo
+                                if (!existingClubUser) {
+                                    this.logger.log(`Agregando usuario ID ${user.id}, identificacion ${user.identification}  al club ID ${currentClubId}`);
+                                    
+                                    const newClubUser = new ClubUser();
+                                    newClubUser.club_id = currentClubId;
+                                    newClubUser.user_id = user.id;
+                                    
+                                    await manager.getRepository(ClubUser).save(newClubUser);
+                                    usersAddedToClub++;
+                                    
+                                    this.logger.log(`Usuario ID ${user.id} agregado exitosamente al club ID ${currentClubId}`);
+                                } else {
+                                    this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
                                 }
                             }
                             successCount++;

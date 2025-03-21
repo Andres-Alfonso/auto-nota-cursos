@@ -5,6 +5,7 @@ import { ProgressService } from './progress.service';
 import { UploadProgressDto } from './dto/upload-progress.dto';
 import { diskStorage, Multer } from 'multer';
 import { UploadProgressEvaluationDto } from './dto/update-progress-evaluation.dto';
+import { UploadFileClubUser } from './dto/club-user.dto';
 
 @Controller('progress')
 export class ProgressController {
@@ -27,6 +28,25 @@ export class ProgressController {
       : undefined;
 
     return this.progressService.processExcelFile(file.path, clubId, clientId);
+  }
+
+  @Post('upload/validate-club-user')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFileClubUser(
+    @UploadedFile() file: Multer.File,
+    @Body() uploadClubUserDto: UploadFileClubUser,
+  ) {
+    // Convertir clubId a número o pasar undefined si no existe
+    const clubId = uploadClubUserDto.clubId ? 
+      parseInt(uploadClubUserDto.clubId.toString(), 10) : 
+      undefined;
+
+    // Pasamos clientId si está disponible
+    const clientId = uploadClubUserDto.clientId 
+      ? parseInt(uploadClubUserDto.clientId.toString(), 10) 
+      : undefined;
+
+    return this.progressService.clubUserExcelFile(file.path, clubId, clientId);
   }
 
   @Post('upload/evaluation')
