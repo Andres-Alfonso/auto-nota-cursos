@@ -1,6 +1,6 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, Not, IsNull } from 'typeorm';
 import { read, utils } from 'xlsx';
 import * as XLSX from 'xlsx';
 import { User } from './entities/user.entity';
@@ -9,6 +9,7 @@ import { Club } from './entities/club.entity';
 import { ExcelRowDto } from './dto/excel-row.dto';
 import { unlink } from 'fs/promises';
 import { GeneralProgressVideoRoom } from './entities/general-progress-videoroom.entity';
+import { Evaluation } from './entities/evaluation.entity';
 import { Content } from './entities/content.entity';
 import { UserProgressVideoRoom } from './entities/user-progress-videoroom.entity';
 import { UserProgressTaskVideoRoom } from './entities/user-pogress-task-videoroom.entity';
@@ -33,6 +34,8 @@ export class ProgressService {
         private videoRoomRepository: Repository<VideoRoom>,
         @InjectRepository(GeneralProgressVideoRoom)
         private generalProgressVideoroomsRepository: Repository<GeneralProgressVideoRoom>,
+        @InjectRepository(Evaluation)
+        private evaluationRepository: Repository<Evaluation>,
         @InjectRepository(Content)
         private contentRepository: Repository<Content>,
         @InjectRepository(UserProgressVideoRoom)
@@ -119,8 +122,20 @@ export class ProgressService {
                 const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
-                const firstProgressDate = new Date().toISOString();  // Si no hay fecha específica, usar la fecha actual
-                const lastProgressDate = new Date();
+                const formatDateForMySQL = (date: Date) => {
+                    return date.toISOString().slice(0, 19).replace("T", " "); // Formato: 'YYYY-MM-DD HH:MM:SS'
+                };
+                const parseDate = (dateStr: string): string => {
+                    if (!dateStr) return new Date().toISOString().slice(0, 19).replace('T', ' '); 
+                
+                    const [month, day, year] = dateStr.split('/').map(Number); 
+                    const fullYear = year < 100 ? 2000 + year : year; // Maneja años de 2 dígitos
+                    const date = new Date(fullYear, month - 1, day); 
+                
+                    return date.toISOString().slice(0, 19).replace('T', ' '); // Formato `YYYY-MM-DD HH:MM:SS`
+                };
+                let firstProgressDate = formatDateForMySQL(new Date());  // Si no hay fecha específica, usar la fecha actual
+                let lastProgressDate = formatDateForMySQL(new Date());
     
                 try {
                     await this.dataSource.transaction(async (manager) => {
@@ -179,29 +194,26 @@ export class ProgressService {
                             
                             // NUEVA LÓGICA: Verificar si está APROBADO y tiene calificación
                             const isApproved = courseValue.toUpperCase() === 'APROBADO' || 
-                                            courseValue.toUpperCase().includes('APROB');
+                                            courseValue.toUpperCase().includes('APROB') || courseValue.toUpperCase() === 'PENDIENTE' || 
+                                            courseValue.toUpperCase().includes('PENDI');
                             const hasCalificacion = !!calificacionValue;
-                            
+
                             // Si no está aprobado o no tiene calificación, saltar este curso
-                            if (!isApproved || !hasCalificacion) {
-                                this.logger.log(`Saltando curso ${courseColumn.name} porque no está aprobado o no tiene calificación. Aprobado: ${isApproved}, Tiene calificación: ${hasCalificacion}`);
+                            if (!isApproved) {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque no está aprobado. Aprobado: ${isApproved}`);
                                 continue;
                             }
-                            
-                            // Convertir calificación a número
-                            let notaCalificacion = 100; // Valor por defecto
-                            const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
-                            if (numMatch) {
-                                notaCalificacion = parseFloat(numMatch[0]);
+
+
+                            // Obtener fecha de validación si está disponible
+                            let fechaValidacion = parseDate(row[courseColumn.fechaValidacionIndex]?.toString().trim());
+                            this.logger.log(`Fechas ${fechaValidacion}`);
+
+                            if (fechaValidacion) { // Solo asigna si fechaValidacion tiene un valor
+                                firstProgressDate = fechaValidacion;
+                                lastProgressDate = fechaValidacion;
                             }
 
-                            this.logger.log(`Nota calificación procesada: ${notaCalificacion}`);
-                            
-                            // Obtener fecha de validación si está disponible
-                            let fechaValidacion = row[courseColumn.fechaValidacionIndex]?.toString().trim();
-                            if (!fechaValidacion) {
-                                fechaValidacion = new Date().toISOString();
-                            }
 
                             // IMPORTANTE: El courseName ahora será el nombre de la columna, no el valor
                             const courseName = courseColumn.name;
@@ -297,6 +309,20 @@ export class ProgressService {
                                     this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
                                 }
                             }
+
+                            if (!hasCalificacion) {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque no tiene calificación: ${hasCalificacion}`);
+                                continue;
+                            }
+                            
+                            // Convertir calificación a número
+                            let notaCalificacion = 100; // Valor por defecto
+                            const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
+                            if (numMatch) {
+                                notaCalificacion = parseFloat(numMatch[0]);
+                            }
+
+                            this.logger.log(`Nota calificación procesada: ${notaCalificacion}`);
 
                             this.logger.log(`Encontrados ${videoRooms.length} VideoRooms para el curso: ${courseName}`);
 
@@ -469,6 +495,82 @@ export class ProgressService {
                                         });
                                     }
                                 }
+
+                                this.logger.log(`Se buscan encuestas`);
+                                const pollsDetails = await this.videoRoomRepository.find({
+                                    where: { id: videoRoom.id, id_polls: Not(IsNull()) }
+                                });
+
+                                this.logger.log(`Encuestas: ${JSON.stringify(pollsDetails)}`);
+
+
+                                for (const poll of pollsDetails) {
+
+                                    const nota = notaCalificacion;
+                                
+                                    await manager.query(`
+                                        INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, NOW(), NOW())
+                                        ON DUPLICATE KEY UPDATE porcen = ?
+                                    `, [user.id, videoRoom.id, poll.id_polls, nota, nota]);
+                                
+                                    const [evaluation] = await manager.query(`
+                                        SELECT * FROM evaluations WHERE id = ?
+                                    `, [poll.id_polls]);
+                                
+                                    if (evaluation) {
+                                        const maxAttempts = evaluation.attempts || Number.MAX_SAFE_INTEGER;
+                                
+                                        const [existingAttempts] = await manager.query(`
+                                            SELECT COUNT(*) as count FROM evaluation_users 
+                                            WHERE user_id = ? AND evaluation_id = ?
+                                        `, [user.id, poll.id_polls]);
+                                
+                                        if (existingAttempts.count < maxAttempts) {
+                                            await manager.query(`
+                                                INSERT INTO evaluation_users (user_id, evaluation_id, created_at, updated_at, nota, approved, intentos)
+                                                VALUES (?, ?, NOW(), NOW(), ?, 1, 1)
+                                                ON DUPLICATE KEY UPDATE nota = ?, approved = 1, intentos = intentos + 1
+                                            `, [user.id, poll.id_polls, nota, nota]);
+                                
+                                            await manager.query(`
+                                                INSERT INTO evaluation_history (evaluation_id, user_id, nota, created_at, updated_at, approved)
+                                                VALUES (?, ?, ?, NOW(), NOW(), 1)
+                                            `, [poll.id_polls, user.id, nota]);
+                                
+                                            const questions = await manager.query(`
+                                                SELECT * FROM questions WHERE evaluation_id = ?
+                                            `, [poll.id_polls]);
+                                
+                                            for (const question of questions) {
+                                                if (question.type === 'open_answer') {
+                                                    await manager.query(`
+                                                        INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content)
+                                                        VALUES (?, ?, NULL, ?, 'Homologacion')
+                                                    `, [poll.id_polls, question.id, user.id]);
+                                                } else {
+                                                    let [option] = await manager.query(`
+                                                        SELECT * FROM options WHERE question_id = ? AND correct = 1 LIMIT 1
+                                                    `, [question.id]);
+                                
+                                                    if (!option) {
+                                                        [option] = await manager.query(`
+                                                            SELECT id FROM options WHERE question_id = ? LIMIT 1
+                                                        `, [question.id]);
+                                                    }
+                                
+                                                    if (option) {
+                                                        await manager.query(`
+                                                            INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content)
+                                                            VALUES (?, ?, ?, ?, NULL)
+                                                        `, [poll.id_polls, question.id, option.id, user.id]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
         
                                 // Obtener detalles de evaluación
                                 const evaluationDetails = await manager.query(`
@@ -482,10 +584,10 @@ export class ProgressService {
         
                                     // Actualizar progreso de evaluación
                                     await manager.query(`
-                                        INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen)
-                                        VALUES (?, ?, ?, ?)
+                                        INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?, ?)
                                         ON DUPLICATE KEY UPDATE porcen = ?
-                                        `, [user.id, videoRoom.id, evalDetail.id_evaluation, nota, nota]);
+                                        `, [user.id, videoRoom.id, evalDetail.id_evaluation, nota, firstProgressDate, lastProgressDate, nota]);
         
                                     // Obtener evaluación para verificar configuraciones
                                     const evaluation = await manager.query(`
@@ -505,16 +607,16 @@ export class ProgressService {
                                             
                                             // Registrar en evaluation_user
                                             await manager.query(`
-                                                INSERT INTO evaluation_users (user_id, evaluation_id, nota, approved, intentos)
-                                                VALUES (?, ?, ?, 1, 1)
+                                                INSERT INTO evaluation_users (user_id, evaluation_id, created_at, updated_at, nota, approved, intentos)
+                                                VALUES (?, ?, ?, ?, ?, 1, 1)
                                                 ON DUPLICATE KEY UPDATE nota = ?, approved = 1, intentos = intentos + 1
-                                                `, [user.id, evalDetail.id_evaluation, nota, nota]);
+                                                `, [user.id, evalDetail.id_evaluation, firstProgressDate, lastProgressDate, nota, nota]);
         
                                             // Registrar en evaluation_history
                                             await manager.query(`
-                                                INSERT INTO evaluation_history (evaluation_id, user_id, nota, approved)
-                                                VALUES (?, ?, ?, 1)
-                                                `, [evalDetail.id_evaluation, user.id, nota]);
+                                                INSERT INTO evaluation_history (evaluation_id, user_id, nota, created_at, updated_at, approved)
+                                                VALUES (?, ?, ?, ?, ?, 1)
+                                                `, [evalDetail.id_evaluation, user.id, nota, firstProgressDate, lastProgressDate]);
         
                                             // Obtener preguntas de la evaluación
                                             const questions = await manager.query(`

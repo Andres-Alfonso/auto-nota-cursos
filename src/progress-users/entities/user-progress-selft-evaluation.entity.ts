@@ -19,8 +19,8 @@ export class UserProgressSelftEvaluationVideoRoom{
     selft_evaluations_id: number;
 
     @CreateDateColumn({ name: 'created_at' })
-    created_at: Date;
+    created_at: string;
 
     @UpdateDateColumn({ name: 'updated_at' })
-    updated_at : Date;
+    updated_at : string;
 }

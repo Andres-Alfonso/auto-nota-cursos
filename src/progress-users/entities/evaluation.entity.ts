@@ -36,4 +36,7 @@ export class Evaluation {
 
   @OneToMany(() => Answer, answer => answer.evaluation)
   answers: Answer[];
+
+  @OneToMany(() => VideoRoom, (videoRoom) => videoRoom.polls)
+  videoRooms: VideoRoom[];
 }
