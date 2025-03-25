@@ -9,6 +9,10 @@ import { MeasurementTestModule } from './measurement-test/measurement-test.modul
 import { Club } from './progress-users/entities/club.entity';
 import { AppService } from './app.service';
 import { ClubTranslation } from './progress-users/entities/club_translations.entity';
+import { SectionClubs } from './progress-users/entities/section-clubs.entity';
+import { DetailSectionClub } from './progress-users/entities/detail-section-club.entity';
+import { ReportsModule } from './reports/reports.module';
+
 
 @Module({
   imports: [
@@ -19,6 +23,7 @@ import { ClubTranslation } from './progress-users/entities/club_translations.ent
     }),
     ProgressModule,
     MeasurementTestModule,
+    ReportsModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.DB_HOST,

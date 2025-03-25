@@ -4,6 +4,7 @@ import { join } from 'path';
 import * as hbs from 'hbs';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { registerHandlebarsHelpers } from './handlebars-helpers';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
@@ -33,8 +34,11 @@ async function bootstrap() {
   app.set('view options', { 
     layout: 'layouts/main'
   });
+  registerHandlebarsHelpers();
   // Registrar helpers de Handlebars
   hbs.registerHelper('currentYear', () => new Date().getFullYear());
+  hbs.registerHelper('eq', (a, b) => a === b);
+  hbs.registerHelper('json', (context) => JSON.stringify(context));
   app.enableCors();
 
   await app.listen(process.env.PORT ?? 3000);

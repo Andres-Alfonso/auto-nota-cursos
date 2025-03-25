@@ -1,0 +1,58 @@
+<div class="bg-white shadow-lg rounded-lg p-6">
+    <h1 class="text-2xl font-bold mb-6 text-gray-800">Vista Previa del Reporte</h1>
+    
+    <div class="mb-4 flex justify-between items-center">
+        <div>
+            <span class="text-gray-600">Total de usuarios: <span class="font-medium">{{previewData.totalUsers}}</span></span>
+            <span class="ml-4 text-gray-600">Mostrando: <span class="font-medium">{{rows.length}}</span> registros</span>
+        </div>
+        
+        <a 
+            href="/ve/reports/users/download?client_id={{clientId}}&startDate={{startDate}}&endDate={{endDate}}"
+            class="px-4 py-2 bg-green-600 text-white font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+        >
+            Descargar Reporte Completo
+        </a>
+    </div>
+    
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    {{#each columns}}
+                    <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {{this.title}}
+                    </th>
+                    {{/each}}
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {{#each rows}}
+                <tr class="hover:bg-gray-50">
+                    {{#each ../columns}}
+                    <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
+                        {{lookup ../this this.field}}
+                    </td>
+                    {{/each}}
+                </tr>
+                {{/each}}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="mt-6 flex justify-between">
+        <a 
+            href="/ve/reports/users?client_id={{clientId}}"
+            class="px-4 py-2 bg-gray-600 text-white font-medium rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+        >
+            Volver a Filtros
+        </a>
+        
+        <a 
+            href="/ve/reports/users/download?client_id={{clientId}}&startDate={{startDate}}&endDate={{endDate}}"
+            class="px-4 py-2 bg-green-600 text-white font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+        >
+            Descargar Excel
+        </a>
+    </div>
+</div>
