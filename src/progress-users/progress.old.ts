@@ -203,11 +203,9 @@ export class ProgressService {
                             const hasCalificacion = !!calificacionValue;
 
                             // Si no está aprobado o no tiene calificación, saltar este curso
-                            if(clubId == null){
-                                if (!isApproved) {
-                                    this.logger.log(`Saltando curso ${courseColumn.name} porque no está aprobado. Aprobado: ${isApproved}`);
-                                    continue;
-                                }
+                            if (!isApproved) {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque no está aprobado. Aprobado: ${isApproved}`);
+                                continue;
                             }
 
 
@@ -512,139 +510,73 @@ export class ProgressService {
                                 const pollsDetails = await this.videoRoomRepository.find({
                                     where: { id: videoRoom.id, id_polls: Not(IsNull()) }
                                 });
-                                
+
                                 // this.logger.log(`Encuestas: ${JSON.stringify(pollsDetails)}`);
-                                
+
+
                                 for (const poll of pollsDetails) {
+
                                     const nota = notaCalificacion;
-                                    
-                                    // Verificar si ya existe el registro de progreso
-                                    const [existingProgress] = await manager.query(`
-                                        SELECT id FROM user_pogress_evaluation_video_rooms 
-                                        WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
-                                    `, [user.id, videoRoom.id, poll.id_polls]);
-                                    
-                                    if (existingProgress) {
-                                        
-                                        await manager.query(`
-                                            UPDATE user_pogress_evaluation_video_rooms 
-                                            SET porcen = ?, created_at = ?, updated_at = ?
-                                            WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
-                                        `, [nota, firstProgressDate, lastProgressDate, user.id, videoRoom.id, poll.id_polls]);
-                                        
-                                        this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
-                                    } else {
-                                        // Insertar nuevo registro
-                                        await manager.query(`
-                                            INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
-                                            VALUES (?, ?, ?, ?, ?, ?)
-                                        `, [user.id, videoRoom.id, poll.id_polls, nota, firstProgressDate, lastProgressDate]);
-                                        
-                                        this.logger.log(`Creado nuevo progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
-                                    }
-                                    
+                                
+                                    await manager.query(`
+                                        INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                        ON DUPLICATE KEY UPDATE porcen = ?, updated_at = ?
+                                    `, [user.id, videoRoom.id, poll.id_polls, nota, firstProgressDate, lastProgressDate, nota, lastProgressDate]);
+                                
                                     const [evaluation] = await manager.query(`
                                         SELECT * FROM evaluations WHERE id = ?
                                     `, [poll.id_polls]);
-                                    
+                                
                                     if (evaluation) {
                                         const maxAttempts = evaluation.attempts || Number.MAX_SAFE_INTEGER;
-                                        
-                                        // Verificar intentos existentes
+                                
                                         const [existingAttempts] = await manager.query(`
                                             SELECT COUNT(*) as count FROM evaluation_users 
                                             WHERE user_id = ? AND evaluation_id = ?
                                         `, [user.id, poll.id_polls]);
-                                        
+                                
                                         if (existingAttempts.count < maxAttempts) {
-                                            // Verificar si ya existe el registro de usuario-evaluación
-                                            const [existingEvalUser] = await manager.query(`
-                                                SELECT id FROM evaluation_users 
-                                                WHERE user_id = ? AND evaluation_id = ?
-                                            `, [user.id, poll.id_polls]);
-                                            
-                                            if (existingEvalUser) {
-                                                // Actualizar registro existente sin tocar updated_at
-                                                await manager.query(`
-                                                    UPDATE evaluation_users 
-                                                    SET nota = ?, created_at = ?, updated_at = ?, approved = 1, intentos = intentos + 1 
-                                                    WHERE user_id = ? AND evaluation_id = ?
-                                                `, [nota, firstProgressDate, lastProgressDate, user.id, poll.id_polls]);
-                                                
-                                                this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
-                                            } else {
-                                                // Insertar nuevo registro
-                                                await manager.query(`
-                                                    INSERT INTO evaluation_users (user_id, evaluation_id, nota, approved, intentos, created_at, updated_at)
-                                                    VALUES (?, ?, ?, 1, 1, ?, ?)
-                                                `, [user.id, poll.id_polls, nota, firstProgressDate, lastProgressDate]);
-                                                
-                                                this.logger.log(`Creado nuevo evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
-                                            }
-                                            
-                                            // Verificar si ya existe un registro en el historial con los mismos valores
-                                            const [existingHistory] = await manager.query(`
-                                                SELECT id FROM evaluation_history 
-                                                WHERE evaluation_id = ? AND user_id = ? AND nota = ? AND approved = 1
-                                                LIMIT 1
-                                            `, [poll.id_polls, user.id, nota]);
-                                            
-                                            if (!existingHistory) {
-                                                // Insertar en historial solo si no existe un registro idéntico
-                                                await manager.query(`
-                                                    INSERT INTO evaluation_history (evaluation_id, user_id, nota, approved, created_at, updated_at)
-                                                    VALUES (?, ?, ?, 1, ?, ?)
-                                                `, [poll.id_polls, user.id, nota, firstProgressDate, lastProgressDate]);
-                                                
-                                                this.logger.log(`Creado registro en evaluation_history para evaluation_id=${poll.id_polls}, user_id=${user.id}`);
-                                            } else {
-                                                this.logger.log(`Registro similar ya existe en evaluation_history para evaluation_id=${poll.id_polls}, user_id=${user.id}`);
-                                            }
-                                            
-                                            // Procesar respuestas a preguntas
+                                            await manager.query(`
+                                                INSERT INTO evaluation_users (user_id, evaluation_id, created_at, updated_at, nota, approved, intentos)
+                                                VALUES (?, ?, ?, ?, ?, 1, 1)
+                                                ON DUPLICATE KEY UPDATE nota = ?, approved = 1, intentos = intentos + 1, updated_at = ?
+                                            `, [user.id, poll.id_polls, firstProgressDate, lastProgressDate, nota, nota, lastProgressDate]);
+                                
+                                            await manager.query(`
+                                                INSERT INTO evaluation_history (evaluation_id, user_id, nota, created_at, updated_at, approved)
+                                                VALUES (?, ?, ?, ?, ?, 1)
+                                            `, [poll.id_polls, user.id, nota, firstProgressDate, lastProgressDate]);
+                                
                                             const questions = await manager.query(`
                                                 SELECT * FROM questions WHERE evaluation_id = ?
                                             `, [poll.id_polls]);
-                                            
+                                
                                             for (const question of questions) {
-                                                // Verificar si ya existe una respuesta para esta pregunta
-                                                const [existingAnswer] = await manager.query(`
-                                                    SELECT id FROM answers 
-                                                    WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
-                                                    LIMIT 1
-                                                `, [poll.id_polls, question.id, user.id]);
-                                                
-                                                if (!existingAnswer) {
-                                                    if (question.type === 'open_answer') {
+                                                if (question.type === 'open_answer') {
+                                                    await manager.query(`
+                                                        INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
+                                                        VALUES (?, ?, NULL, ?, 'Homologacion', ?, ?)
+                                                    `, [poll.id_polls, question.id, user.id, firstProgressDate, lastProgressDate]);
+                                                } else {
+                                                    let [option] = await manager.query(`
+                                                        SELECT * FROM options WHERE question_id = ? AND correct = 1 LIMIT 1
+                                                    `, [question.id]);
+                                
+                                                    if (!option) {
+                                                        [option] = await manager.query(`
+                                                            SELECT id FROM options WHERE question_id = ? LIMIT 1
+                                                        `, [question.id]);
+                                                    }
+                                
+                                                    if (option) {
                                                         await manager.query(`
                                                             INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
-                                                            VALUES (?, ?, NULL, ?, 'Homologacion', ?, ?)
-                                                        `, [poll.id_polls, question.id, user.id, firstProgressDate, lastProgressDate]);
-                                                    } else {
-                                                        let [option] = await manager.query(`
-                                                            SELECT * FROM options WHERE question_id = ? AND correct = 1 LIMIT 1
-                                                        `, [question.id]);
-                                                        
-                                                        if (!option) {
-                                                            [option] = await manager.query(`
-                                                                SELECT id FROM options WHERE question_id = ? LIMIT 1
-                                                            `, [question.id]);
-                                                        }
-                                                        
-                                                        if (option) {
-                                                            await manager.query(`
-                                                                INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
-                                                                VALUES (?, ?, ?, ?, NULL, ?, ?)
-                                                            `, [poll.id_polls, question.id, option.id, user.id, firstProgressDate, lastProgressDate]);
-                                                        }
+                                                            VALUES (?, ?, ?, ?, NULL, ?, ?)
+                                                        `, [poll.id_polls, question.id, option.id, user.id, firstProgressDate, lastProgressDate]);
                                                     }
-                                                    this.logger.log(`Creada respuesta para question_id=${question.id}, user_id=${user.id}`);
-                                                } else {
-                                                    this.logger.log(`Respuesta ya existe para question_id=${question.id}, user_id=${user.id}`);
                                                 }
                                             }
-                                        } else {
-                                            this.logger.log(`Se ha alcanzado el máximo de intentos (${maxAttempts}) para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
                                         }
                                     }
                                 }
@@ -654,147 +586,85 @@ export class ProgressService {
                                 const evaluationDetails = await manager.query(`
                                     SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
                                 `, [videoRoom.id]);
-
+        
                                 // Procesar cada evaluación
                                 for (const evalDetail of evaluationDetails) {
                                     // Determinar la nota (calificación del Excel o 100 por defecto)
                                     const nota = notaCalificacion; // Usamos la calificación obtenida de la columna del Excel
-
-                                    // Verificar si ya existe el registro de progreso
-                                    const [existingProgress] = await manager.query(`
-                                        SELECT id FROM user_pogress_evaluation_video_rooms 
-                                        WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
-                                    `, [user.id, videoRoom.id, evalDetail.id_evaluation]);
-                                    
-                                    if (existingProgress) {
-                                        // Actualizar sin modificar updated_at
-                                        await manager.query(`
-                                            UPDATE user_pogress_evaluation_video_rooms 
-                                            SET porcen = ?, created_at = ?, updated_at = ? 
-                                            WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
-                                        `, [nota, firstProgressDate, lastProgressDate, user.id, videoRoom.id, evalDetail.id_evaluation]);
-                                        
-                                        this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${evalDetail.id_evaluation}`);
-                                    } else {
-                                        // Insertar nuevo registro
-                                        await manager.query(`
-                                            INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
-                                            VALUES (?, ?, ?, ?, ?, ?)
-                                        `, [user.id, videoRoom.id, evalDetail.id_evaluation, nota, firstProgressDate, lastProgressDate]);
-                                        
-                                        this.logger.log(`Creado nuevo progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${evalDetail.id_evaluation}`);
-                                    }
-
+        
+                                    // Actualizar progreso de evaluación
+                                    await manager.query(`
+                                        INSERT INTO user_pogress_evaluation_video_rooms (id_user, id_videoroom, id_evaluation, porcen, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                        ON DUPLICATE KEY UPDATE porcen = ?, updated_at = ?
+                                        `, [user.id, videoRoom.id, evalDetail.id_evaluation, nota, firstProgressDate, lastProgressDate, nota, lastProgressDate]);
+        
                                     // Obtener evaluación para verificar configuraciones
                                     const evaluation = await manager.query(`
                                         SELECT * FROM evaluations WHERE id = ?
-                                    `, [evalDetail.id_evaluation]);
-
+                                        `, [evalDetail.id_evaluation]);
+        
                                     if (evaluation?.length > 0) {
                                         const maxAttempts = evaluation[0].attempts || Number.MAX_SAFE_INTEGER;
-
+        
                                         // Verificar intentos actuales
                                         const existingAttempts = await manager.query(`
-                                            SELECT COUNT(*) as count FROM evaluation_users 
-                                            WHERE user_id = ? AND evaluation_id = ?
-                                        `, [user.id, evalDetail.id_evaluation]);
-
-                                        if (existingAttempts[0].count < maxAttempts) {
-                                            // Verificar si ya existe el registro de usuario-evaluación
-                                            const [existingEvalUser] = await manager.query(`
-                                                SELECT id FROM evaluation_users 
+                                                SELECT COUNT(*) as count FROM evaluation_users 
                                                 WHERE user_id = ? AND evaluation_id = ?
                                             `, [user.id, evalDetail.id_evaluation]);
+        
+                                        if (existingAttempts[0].count < maxAttempts) {
                                             
-                                            if (existingEvalUser) {
-                                                // Actualizar registro existente sin tocar updated_at
-                                                await manager.query(`
-                                                    UPDATE evaluation_users 
-                                                    SET nota = ?, created_at = ?, updated_at = ?, approved = 1, intentos = intentos + 1
-                                                    WHERE user_id = ? AND evaluation_id = ?
-                                                `, [nota, firstProgressDate, lastProgressDate, user.id, evalDetail.id_evaluation]);
-                                                
-                                                this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${evalDetail.id_evaluation}`);
-                                            } else {
-                                                // Insertar nuevo registro
-                                                await manager.query(`
-                                                    INSERT INTO evaluation_users (user_id, evaluation_id, nota, approved, intentos, created_at, updated_at)
-                                                    VALUES (?, ?, ?, 1, 1, ?, ?)
-                                                `, [user.id, evalDetail.id_evaluation, nota, firstProgressDate, lastProgressDate]);
-                                                
-                                                this.logger.log(`Creado nuevo evaluation_users para user_id=${user.id}, evaluation_id=${evalDetail.id_evaluation}`);
-                                            }
-                                            
-                                            // Verificar si ya existe un registro en el historial con los mismos valores
-                                            const [existingHistory] = await manager.query(`
-                                                SELECT id FROM evaluation_history 
-                                                WHERE evaluation_id = ? AND user_id = ? AND nota = ? AND approved = 1
-                                                LIMIT 1
-                                            `, [evalDetail.id_evaluation, user.id, nota]);
-                                            
-                                            if (!existingHistory) {
-                                                // Insertar en historial solo si no existe un registro idéntico
-                                                await manager.query(`
-                                                    INSERT INTO evaluation_history (evaluation_id, user_id, nota, approved, created_at, updated_at)
-                                                    VALUES (?, ?, ?, 1, ?, ?)
+                                            // Registrar en evaluation_user
+                                            await manager.query(`
+                                                INSERT INTO evaluation_users (user_id, evaluation_id, created_at, updated_at, nota, approved, intentos)
+                                                VALUES (?, ?, ?, ?, ?, 1, 1)
+                                                ON DUPLICATE KEY UPDATE nota = ?, approved = 1, intentos = intentos + 1
+                                                `, [user.id, evalDetail.id_evaluation, firstProgressDate, lastProgressDate, nota, nota]);
+        
+                                            // Registrar en evaluation_history
+                                            await manager.query(`
+                                                INSERT INTO evaluation_history (evaluation_id, user_id, nota, created_at, updated_at, approved)
+                                                VALUES (?, ?, ?, ?, ?, 1)
                                                 `, [evalDetail.id_evaluation, user.id, nota, firstProgressDate, lastProgressDate]);
-                                                
-                                                this.logger.log(`Creado registro en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
-                                            } else {
-                                                this.logger.log(`Registro similar ya existe en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
-                                            }
-
+        
                                             // Obtener preguntas de la evaluación
                                             const questions = await manager.query(`
                                                 SELECT * FROM questions WHERE evaluation_id = ?
-                                            `, [evalDetail.id_evaluation]);
-
+                                                `, [evalDetail.id_evaluation]);
+        
                                             // Crear respuestas para cada pregunta
                                             for (const question of questions) {
-                                                // Verificar si ya existe una respuesta para esta pregunta
-                                                const [existingAnswer] = await manager.query(`
-                                                    SELECT id FROM answers 
-                                                    WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
-                                                    LIMIT 1
-                                                `, [evalDetail.id_evaluation, question.id, user.id]);
-                                                
-                                                if (!existingAnswer) {
-                                                    if (question.type === 'open_answer') {
+                                                if (question.type === 'open_answer') {
+                                                    await manager.query(`
+                                                        INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
+                                                        VALUES (?, ?, NULL, ?, 'Homologacion', ?, ?)
+                                                        `, [evalDetail.id_evaluation, question.id, user.id, firstProgressDate, lastProgressDate]);
+                                                } else {
+                                                    // Obtener primera opción correcta
+                                                    const option = await manager.query(`
+                                                        SELECT * FROM options 
+                                                        WHERE question_id = ? AND correct = 1
+                                                        LIMIT 1
+                                                        `, [question.id]);
+        
+                                                    // Si no hay opción correcta, obtener la primera
+                                                    const optionId = option.length > 0
+                                                        ? option[0].id
+                                                        : (await manager.query(`
+                                                        SELECT id FROM options 
+                                                        WHERE question_id = ? 
+                                                        LIMIT 1
+                                                        `, [question.id]))[0]?.id;
+        
+                                                    if (optionId) {
                                                         await manager.query(`
                                                             INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
-                                                            VALUES (?, ?, NULL, ?, 'Homologacion', ?, ?)
-                                                        `, [evalDetail.id_evaluation, question.id, user.id, firstProgressDate, lastProgressDate]);
-                                                    } else {
-                                                        // Obtener primera opción correcta
-                                                        const option = await manager.query(`
-                                                            SELECT * FROM options 
-                                                            WHERE question_id = ? AND correct = 1
-                                                            LIMIT 1
-                                                        `, [question.id]);
-
-                                                        // Si no hay opción correcta, obtener la primera
-                                                        const optionId = option.length > 0
-                                                            ? option[0].id
-                                                            : (await manager.query(`
-                                                            SELECT id FROM options 
-                                                            WHERE question_id = ? 
-                                                            LIMIT 1
-                                                        `, [question.id]))[0]?.id;
-
-                                                        if (optionId) {
-                                                            await manager.query(`
-                                                                INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
-                                                                VALUES (?, ?, ?, ?, NULL, ?, ?)
-                                                            `, [evalDetail.id_evaluation, question.id, optionId, user.id, firstProgressDate, lastProgressDate]);
-                                                        }
+                                                            VALUES (?, ?, ?, ?, NULL, ?, ?)
+                                                        `, [evalDetail.id_evaluation, question.id, optionId, user.id, firstProgressDate, lastProgressDate]);
                                                     }
-                                                    this.logger.log(`Creada respuesta para question_id=${question.id}, user_id=${user.id}`);
-                                                } else {
-                                                    this.logger.log(`Respuesta ya existe para question_id=${question.id}, user_id=${user.id}`);
                                                 }
                                             }
-                                        } else {
-                                            this.logger.log(`Se ha alcanzado el máximo de intentos (${maxAttempts}) para user_id=${user.id}, evaluation_id=${evalDetail.id_evaluation}`);
                                         }
                                     }
                                 }
@@ -863,17 +733,6 @@ export class ProgressService {
             let coursesNotFound: string[] = [];
             let usersNotFound: string[] = [];
             let usersAddedToClub = 0;
-            let usersRemovedFromClub = 0;
-            
-            // Arrays para registrar detalles para el reporte
-            let detailedResults: {
-                identification: string;
-                email: string;
-                courseName: string;
-                action: string;  // "added", "removed", "already_registered", "not_found", "course_not_found"
-                status: string;  // "success", "error"
-                message: string;
-            }[] = [];
     
             const headers = rows.shift(); // Remueve la primera fila y la usa como encabezados
             const indexMap = headers.reduce((acc, header, index) => {
@@ -940,39 +799,37 @@ export class ProgressService {
                             usersNotFoundCount++;
                             usersNotFound.push(`Identificación: ${identification || 'No proporcionada'} - Correo: ${email || 'No proporcionado'}`);
                             this.logger.warn(`Usuario no encontrado: ${identification || ''} / ${email || ''}`);
-                            
-                            // Registrar usuario no encontrado en detalles
-                            detailedResults.push({
-                                identification: identification || 'No proporcionada',
-                                email: email || 'No proporcionado',
-                                courseName: 'N/A',
-                                action: 'not_found',
-                                status: 'error',
-                                message: 'Usuario no encontrado en el sistema'
-                            });
-                            
                             return; // Usar return en lugar de continue para salir de la transacción actual
-                        } else {
+                        }else{
                             this.logger.warn(`--------------------------------------------------------------`);
                             this.logger.warn(`Usuario encontrado: ${identification || ''} / ${email || ''}`);
                             this.logger.warn(`--------------------------------------------------------------`);
                         }
+
+
     
                         // Procesar cada curso en la fila
                         for (const courseColumn of courseColumns) {
                             // Mostrar información de debugging
                             this.logger.log(`Procesando curso: ${courseColumn.name}`);
                             
-                            // Obtener el valor del curso (APROBADO/PENDIENTE/NO APLICA)
+                            // Obtener el valor del curso (APROBADO/NO APLICA)
                             const courseValue = row[courseColumn.index]?.toString().trim();
                             
                             this.logger.log(`Valor del curso: ${courseValue}`);
                             
-                            // Si está vacío, saltar este curso
-                            if (!courseValue) {
-                                this.logger.log(`Saltando curso ${courseColumn.name} porque está vacío`);
+                            // Si es NO APLICA o está vacío, saltar este curso
+                            if (!courseValue || courseValue === 'NO APLICA') {
+                                this.logger.log(`Saltando curso ${courseColumn.name} porque es NO APLICA o vacío`);
                                 continue;
                             }
+                            
+                            // Verificar si está APROBADO
+                            // if (courseValue.toUpperCase() !== 'APROBADO' && 
+                            //     !courseValue.toUpperCase().includes('APROB')) {
+                            //     this.logger.log(`Saltando curso ${courseColumn.name} porque no está APROBADO: ${courseValue}`);
+                            //     continue;
+                            // }
                             
                             // IMPORTANTE: El courseName ahora será el nombre de la columna, no el valor
                             const courseName = courseColumn.name;
@@ -988,7 +845,7 @@ export class ProgressService {
                                 const clubTranslation = await manager.getRepository(ClubTranslation).findOne({
                                     where: { title: courseName }
                                 });
-    
+
                                 this.logger.log(`Busqueda id de curso: ${clubTranslation?.club_id}`);
                                 
                                 // Si hay coincidencia exacta
@@ -1007,120 +864,42 @@ export class ProgressService {
                                     }
                                 }
                             }
-    
+
                             if (!currentClubId) {
                                 countCoursesNotFound++;
                                 if (!coursesNotFound.includes(courseName)) {
                                     coursesNotFound.push(courseName);
                                 }
                                 this.logger.warn(`Curso no encontrado: ${courseName}`);
-                                
-                                // Registrar curso no encontrado en detalles
-                                detailedResults.push({
-                                    identification: identification || 'No proporcionada',
-                                    email: email || 'No proporcionado',
-                                    courseName: courseName,
-                                    action: 'course_not_found',
-                                    status: 'error',
-                                    message: 'Curso no encontrado en el sistema'
-                                });
-                                
                                 continue; // Saltar al siguiente curso
                             }
-    
+
                             // Ahora verificamos si el usuario ya está registrado en el club
-                            const existingClubUser = await manager.getRepository(ClubUser).findOne({
-                                where: {
-                                    club_id: currentClubId,
-                                    user_id: user.id
+                            if (currentClubId) {
+                                const existingClubUser = await manager.getRepository(ClubUser).findOne({
+                                    where: {
+                                        club_id: currentClubId,
+                                        user_id: user.id
+                                    }
+                                });
+                                
+                                // Si el usuario no está registrado en el club, agregarlo
+                                if (!existingClubUser) {
+                                    this.logger.log(`Agregando usuario ID ${user.id}, identificacion ${user.identification}  al club ID ${currentClubId}`);
+                                    
+                                    const newClubUser = new ClubUser();
+                                    newClubUser.club_id = currentClubId;
+                                    newClubUser.user_id = user.id;
+                                    
+                                    await manager.getRepository(ClubUser).save(newClubUser);
+                                    usersAddedToClub++;
+                                    
+                                    this.logger.log(`Usuario ID ${user.id} agregado exitosamente al club ID ${currentClubId}`);
+                                } else {
+                                    this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
                                 }
-                            });
-                            
-                            // Comprobar si el valor del curso es APROBADO o PENDIENTE
-                            const valueUpperCase = courseValue.toUpperCase();
-                            const shouldBeInCourse = valueUpperCase === 'APROBADO' || 
-                                                   valueUpperCase.includes('APROB') || 
-                                                   valueUpperCase === 'PENDIENTE' ||
-                                                   valueUpperCase.includes('PEND');
-                            
-                            // Si debe estar en el curso pero no está registrado
-                            if (shouldBeInCourse && !existingClubUser) {
-                                this.logger.log(`Agregando usuario ID ${user.id}, identificacion ${user.identification} al club ID ${currentClubId}`);
-                                
-                                const newClubUser = new ClubUser();
-                                newClubUser.club_id = currentClubId;
-                                newClubUser.user_id = user.id;
-                                
-                                await manager.getRepository(ClubUser).save(newClubUser);
-                                usersAddedToClub++;
-                                
-                                this.logger.log(`Usuario ID ${user.id} agregado exitosamente al club ID ${currentClubId}`);
-                                
-                                // Registrar adición en detalles
-                                detailedResults.push({
-                                    identification: identification || 'No proporcionada',
-                                    email: email || 'No proporcionado',
-                                    courseName: courseName,
-                                    action: 'added',
-                                    status: 'success',
-                                    message: `Usuario agregado al curso (${valueUpperCase})`
-                                });
-                                
-                                successCount++;
-                            } 
-                            // Si no debe estar en el curso (NO APLICA) pero está registrado
-                            else if (valueUpperCase === 'NO APLICA' && existingClubUser) {
-                                this.logger.log(`Eliminando usuario ID ${user.id} del club ID ${currentClubId}`);
-                                
-                                await manager.getRepository(ClubUser).remove(existingClubUser);
-                                usersRemovedFromClub++;
-                                
-                                this.logger.log(`Usuario ID ${user.id} eliminado exitosamente del club ID ${currentClubId}`);
-                                
-                                // Registrar eliminación en detalles
-                                detailedResults.push({
-                                    identification: identification || 'No proporcionada',
-                                    email: email || 'No proporcionado',
-                                    courseName: courseName,
-                                    action: 'removed',
-                                    status: 'success',
-                                    message: 'Usuario eliminado del curso (NO APLICA)'
-                                });
-                                
-                                successCount++;
                             }
-                            // Si debe estar en el curso y ya está registrado
-                            else if (shouldBeInCourse && existingClubUser) {
-                                this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
-                                
-                                // Registrar que ya estaba inscrito en detalles
-                                detailedResults.push({
-                                    identification: identification || 'No proporcionada',
-                                    email: email || 'No proporcionado',
-                                    courseName: courseName,
-                                    action: 'already_registered',
-                                    status: 'success',
-                                    message: `Usuario ya registrado en el curso (${valueUpperCase})`
-                                });
-                                
-                                successCount++;
-                            }
-                            // Si no debe estar en el curso y no está registrado
-                            else if (valueUpperCase === 'NO APLICA' && !existingClubUser) {
-                                this.logger.log(`Usuario ID ${user.id} no está registrado en el club ID ${currentClubId} - No se requiere acción (NO APLICA)`);
-                                
-                                // Registrar que no estaba inscrito y no se requiere acción
-                                detailedResults.push({
-                                    identification: identification || 'No proporcionada',
-                                    email: email || 'No proporcionado',
-                                    courseName: courseName,
-                                    action: 'no_action',
-                                    status: 'success',
-                                    message: 'No se requiere acción (NO APLICA)'
-                                });
-                                
-                                successCount++;
-                            }
+                            successCount++;
                         }
                     });
                 } catch (error) {
@@ -1131,66 +910,10 @@ export class ProgressService {
                         error: `Error: ${error.message}`
                     });
                     this.logger.error(`Error procesando fila: ${error.message}`);
-                    
-                    // Registrar error en detalles
-                    detailedResults.push({
-                        identification: identification || 'No proporcionada',
-                        email: email || 'No proporcionado',
-                        courseName: 'Múltiples cursos',
-                        action: 'error',
-                        status: 'error',
-                        message: error.message
-                    });
                 }
             }
     
-            // Generar reporte Excel con los resultados detallados
-            const reportWorkbook = XLSX.utils.book_new();
-            
-            // Crear hoja de resumen
-            const summaryData = [
-                ['Resumen del Proceso'],
-                ['Total usuarios procesados', rows.length],
-                ['Operaciones exitosas', successCount],
-                ['Errores', errorCount],
-                ['Usuarios no encontrados', usersNotFoundCount],
-                ['Cursos no encontrados', countCoursesNotFound],
-                ['Usuarios agregados a cursos', usersAddedToClub],
-                ['Usuarios eliminados de cursos', usersRemovedFromClub],
-                [''],
-                ['Cursos no encontrados'],
-                ...coursesNotFound.map(course => [course])
-            ];
-            
-            const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
-            XLSX.utils.book_append_sheet(reportWorkbook, summarySheet, 'Resumen');
-            
-            // Crear hoja de detalles
-            const detailsData = [
-                ['Identificación', 'Correo', 'Curso', 'Acción', 'Estado', 'Mensaje']
-            ];
-            
-            // Agregar todos los detalles
-            detailedResults.forEach(result => {
-                detailsData.push([
-                    result.identification,
-                    result.email,
-                    result.courseName,
-                    result.action,
-                    result.status,
-                    result.message
-                ]);
-            });
-            
-            const detailsSheet = XLSX.utils.aoa_to_sheet(detailsData);
-            XLSX.utils.book_append_sheet(reportWorkbook, detailsSheet, 'Detalles');
-            
-            // Guardar el archivo de reporte
-            const reportFilePath = `${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`;
-            this.logger.warn(`Archivo generado en: ${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`)
-            XLSX.writeFile(reportWorkbook, reportFilePath);
-    
-            // Eliminar archivo original después de procesar
+            // Eliminar archivo después de procesar
             await unlink(filePath);
     
             return {
@@ -1200,11 +923,8 @@ export class ProgressService {
                 errors: errorCount,
                 errorDetails: errors,
                 countCoursesNotFound: countCoursesNotFound,
-                coursesNotFound: coursesNotFound,
-                usersNotFound: usersNotFound,
-                usersAddedToClub,
-                usersRemovedFromClub,
-                reportFilePath
+                coursesNotFound: coursesNotFound, // Incluir los cursos que no se encontraron
+                usersAddedToClub
             };
         } catch (error) {
             this.logger.error(`Error procesando archivo: ${error.message}`);
@@ -1307,13 +1027,12 @@ export class ProgressService {
                     }
                     
                     try {
+                        // Intentar detectar el formato de fecha
                         let date: Date;
                         
-                        // Comprobar si es formato DD/MM/YYYY
+                        // Comprobar si es formato DD/MM/YYYY o MM/DD/YYYY
                         if (dateStr.includes('/')) {
                             const parts = dateStr.split('/').map(p => parseInt(p.trim(), 10));
-
-                            // this.logger.log(parts);
                             
                             // Si alguna parte no es un número, usar fecha actual
                             if (parts.some(isNaN)) {
@@ -1321,32 +1040,25 @@ export class ProgressService {
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            const [month, day, year] = parts;
+                            const [first, second, third] = parts;
                             
-                            // Siempre asumir formato DD/MM/YYYY
-                            date = new Date(year, month - 1, day);
+                            // Determinar si es DD/MM/YYYY o MM/DD/YYYY
+                            if (first > 31) { // Si el primer número es > 31, probablemente es un año
+                                date = new Date(first, second - 1, third);
+                            } else if (second > 12) { // Si el segundo número es > 12, probablemente es un día
+                                date = new Date(third, first - 1, second);
+                            } else {
+                                // Asumir formato DD/MM/YYYY por defecto
+                                date = new Date(third, second - 1, first);
+                            }
                             
                             // Manejar años de 2 dígitos
-                            if (year < 100) {
-                                date.setFullYear(2000 + year);
+                            if (third < 100) {
+                                date.setFullYear(2000 + third);
                             }
                         } else if (dateStr.includes('-')) {
-                            // Para formato con guiones, dividir y ordenar como DD/MM/YYYY
-                            const parts = dateStr.split('-').map(p => parseInt(p.trim(), 10));
-                            
-                            if (parts.length === 3) {
-                                // Asumir que viene como DD-MM-YYYY
-                                const [day, month, year] = parts;
-                                date = new Date(year, month - 1, day);
-                                
-                                // Manejar años de 2 dígitos
-                                if (year < 100) {
-                                    date.setFullYear(2000 + year);
-                                }
-                            } else {
-                                // Si no tiene 3 partes, intentar parsear directamente
-                                date = new Date(dateStr);
-                            }
+                            // Formato ISO YYYY-MM-DD
+                            date = new Date(dateStr);
                         } else {
                             // Intentar parsear directamente
                             date = new Date(dateStr);
@@ -1988,15 +1700,9 @@ export class ProgressService {
                                                 UPDATE evaluation_users 
                                                 SET updated_at = ?, created_at = ? 
                                                 WHERE user_id = ? AND evaluation_id = ?
-                                              `, [lastProgressDate, firstProgressDate, user.id, poll.id_polls]);
-                                              
-                                              // Selecciona el registro actualizado
-                                              const updatedRow = await manager.query(`
-                                                SELECT * FROM evaluation_users 
-                                                WHERE user_id = ? AND evaluation_id = ?
-                                              `, [user.id, poll.id_polls]);
-                                              
-                                            // this.logger.log(`Datos actualizados en evaluation_users: ${JSON.stringify(updatedRow)}`);
+                                            `, [lastProgressDate, firstProgressDate, user.id, poll.id_polls]);
+
+                                            // this.logger.log(`Se actualiza fechas en evaluation_users`);
 
                                             // Obtener preguntas y crear respuestas solo para nuevos intentos
                                             const questions = await manager.query(`

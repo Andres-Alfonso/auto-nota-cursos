@@ -21,6 +21,9 @@ export class User {
   @Column({ name: 'client_id' })
   client_id: number;
 
+  @Column()
+  status_validation: string;
+
   @OneToMany(() => MeasurementTestAnswer, (answer) => answer.user)
   measurementTestAnswers: MeasurementTestAnswer[];
 }

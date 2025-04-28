@@ -7,8 +7,8 @@ export class GeneralProgressVideoRoom {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
-  porcen: number;
+  @Column({ type: 'int', nullable: true })
+  porcen: number | null;
 
   @Column({ type: 'int', unsigned: true })
   id_videoroom: number;

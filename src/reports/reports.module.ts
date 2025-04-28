@@ -21,6 +21,7 @@ import { ClubTranslation } from '../progress-users/entities/club_translations.en
 import { DetailSectionClub } from 'src/progress-users/entities/detail-section-club.entity';
 import { DetailUserSectionsClub } from 'src/progress-users/entities/detail-user-sections-club.entity';
 import { CustomFieldOption } from 'src/progress-users/entities/custom-field-option.entity';
+import { UsersUpdateService } from './user-update.service';
 
 @Module({
   imports: [
@@ -47,7 +48,7 @@ import { CustomFieldOption } from 'src/progress-users/entities/custom-field-opti
     ]),
   ],
   controllers: [ReportsController],
-  providers: [ReportsService],
-  exports: [ReportsService],
+  providers: [ReportsService, UsersUpdateService],
+  exports: [ReportsService, UsersUpdateService],
 })
 export class ReportsModule {}

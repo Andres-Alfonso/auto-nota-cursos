@@ -25,6 +25,25 @@ export class AppController {
     };
   }
 
+  @Get('/upload-second')
+  @Render('main/upload-file-users-note')
+  async rootSecond(@Req() request: Request, @Query('client_id') clientId?: number) {
+    // Obtener el idioma de la solicitud
+    const locale = request.cookies?.locale || 'es'; // Asume que el idioma está en una cookie
+    
+    // Si se proporciona client_id, filtrar por ese cliente
+    const clubs = clientId 
+      ? await this.appService.findByClientId(clientId, locale)
+      : await this.appService.findAll(locale);
+    
+    return { 
+      message: '¡Homologar notas second!',
+      title: 'Homologación Notas second',
+      pageCss: 'home',
+      clubs: clubs // Pasar los datos a la vista
+    };
+  }
+
   // se agrega un endpoint específico para filtrar por client_id
   @Get('by-client/:clientId')
   @Render('main/index')

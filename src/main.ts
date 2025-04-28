@@ -10,6 +10,13 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
   );
+  // app.enableCors({
+  //   origin: ['https://formacionvirtual.clinicaupb.org.co'], // o usa '*' si estás en desarrollo
+  //   methods: 'GET,POST,PUT,DELETE,OPTIONS',
+  //   allowedHeaders: 'Origin,Content-Type,Accept,Authorization,X-Requested-With',
+  //   credentials: true,
+  // });
+  // app.enableShutdownHooks();
 
   app.setGlobalPrefix('api/v1', {
     exclude: ['/ve*path'], // Excluye las rutas que empiezan con '/ve'

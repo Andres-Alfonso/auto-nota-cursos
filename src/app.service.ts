@@ -46,6 +46,7 @@ export class AppService {
     // Buscar clubes por client_id
     const clubs = await this.clubRepository.find({
       where: { client_id: clientId },
+      order: { name: 'ASC' },
       relations: ['translations'],
     });
 
