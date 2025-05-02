@@ -1,0 +1,23 @@
+services:
+  app-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    command: npm run start:dev
+    restart: unless-stopped
+    volumes:
+      - ./:/usr/src/app
+      # - ./node_modules:/usr/src/app/node_modules
+    ports:
+      - "3005:3000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+    networks:
+      - kalmsystem
+
+networks:
+  kalmsystem:
+    external: true
