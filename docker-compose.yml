@@ -9,8 +9,54 @@ services:
     volumes:
       - ./:/usr/src/app
       # - ./node_modules:/usr/src/app/node_modules
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=3306
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DATABASE=${DB_DATABASE}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION=${JWT_EXPIRATION}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - API_BASE_URL=${API_BASE_URL}
+      - API_TOKEN=${API_TOKEN}
+      - UPLOAD_DIR=${UPLOAD_DIR}
     ports:
       - "3005:3000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+    networks:
+      - kalmsystem
+
+  # --- Producción ---
+  app-backend-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    ports:
+      - "1905:3000" # Puerto estándar en host para producción (o el que necesites)
+    environment:
+      # NODE_ENV=production # Ya está en el Dockerfile, pero puede ser redundante aquí
+      # Carga variables desde un archivo .env en el mismo directorio que docker-compose.yml
+      # ¡Asegúrate de que este archivo NO se comitee a git si contiene secretos!
+      - NODE_ENV=${NODE_ENV}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=3306
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DATABASE=${DB_DATABASE}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION=${JWT_EXPIRATION}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - API_BASE_URL=${API_BASE_URL}
+      - API_TOKEN=${API_TOKEN}
+      - UPLOAD_DIR=${UPLOAD_DIR}
+
     logging:
       driver: "json-file"
       options:
