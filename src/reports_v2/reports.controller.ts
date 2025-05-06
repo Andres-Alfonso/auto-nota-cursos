@@ -154,6 +154,16 @@ import {
         const fileStream = fs.createReadStream(filePath);
         fileStream.pipe(res);
 
+        // res.on('finish', () => {
+        //   fs.unlink(filePath, (err) => {
+        //     if (err) {
+        //       this.logger.error(`Error al eliminar archivo ${filePath}: ${err.message}`);
+        //     } else {
+        //       this.logger.log(`Archivo eliminado: ${filePath}`);
+        //     }
+        //   });
+        // });
+
         // Manejar errores de stream
         fileStream.on('error', (err) => {
             this.logger.error(`Error al leer el archivo: ${err.message}`, err.stack);

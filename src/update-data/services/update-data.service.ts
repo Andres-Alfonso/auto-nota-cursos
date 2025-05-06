@@ -265,7 +265,7 @@ export class UpdateDataService {
             }
             
             // Crear directorio si no existe
-            const reportsDir = path.join(process.cwd(), 'reports');
+            const reportsDir = path.join(process.cwd(), 'uploads/reports/updateData');
             if (!fs.existsSync(reportsDir)) {
                 fs.mkdirSync(reportsDir, { recursive: true });
             }

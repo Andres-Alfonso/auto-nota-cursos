@@ -799,7 +799,7 @@ export class CourseMetricsService {
     
     // Crear directorio para reportes si no existe
     const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
-    const reportsDir = path.join(uploadsDir, 'reports');
+    const reportsDir = path.join(uploadsDir, 'reports/course-status');
     
     if (!fs.existsSync(reportsDir)) {
       fs.mkdirSync(reportsDir, { recursive: true });
@@ -819,7 +819,7 @@ export class CourseMetricsService {
     ): Promise<string> {
         // Directorio para reportes
         const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
-        const reportsDir = path.join(uploadsDir, 'reports');
+        const reportsDir = path.join(uploadsDir, 'reports/course-status');
         
         // Crear directorio si no existe
         if (!fs.existsSync(reportsDir)) {
@@ -942,7 +942,7 @@ export class CourseMetricsService {
     
     // Directorio para reportes
     const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
-    const reportsDir = path.join(uploadsDir, 'reports');
+    const reportsDir = path.join(uploadsDir, 'reports/course-status');
     
     // Crear directorio si no existe
     if (!fs.existsSync(reportsDir)) {
