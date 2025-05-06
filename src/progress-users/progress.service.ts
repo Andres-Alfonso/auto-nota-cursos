@@ -716,6 +716,13 @@ export class ProgressService {
                                                     this.logger.log(`Creada respuesta para question_id=${question.id}, user_id=${user.id}`);
                                                 } else {
                                                     this.logger.log(`Respuesta ya existe para question_id=${question.id}, user_id=${user.id}`);
+                                                    await manager.query(`
+                                                        UPDATE answers 
+                                                        SET created_at = ?, updated_at = ? 
+                                                        WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
+                                                    `, [firstProgressDate, lastProgressDate, poll.id_polls, question.id, user.id]);
+                                                    
+                                                    this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}, nueva fecha_creacion=${firstProgressDate}, nueva fecha_actualizacion=${lastProgressDate}`);
                                                 }
                                             }
                                         } else {
@@ -816,14 +823,21 @@ export class ProgressService {
                                                 
                                                 this.logger.log(`Creado registro en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
                                             } else {
-                                                this.logger.log(`Registro similar ya existe en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
+                                                // Actualizar fechas en registros de historial existentes
+                                                await manager.query(`
+                                                    UPDATE evaluation_history 
+                                                    SET created_at = ?, updated_at = ?
+                                                    WHERE evaluation_id = ? AND user_id = ? AND nota = ? AND approved = 1
+                                                `, [firstProgressDate, lastProgressDate, evalDetail.id_evaluation, user.id, nota]);
+                                                
+                                                this.logger.log(`Actualizada fecha en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
                                             }
-
+                                        
                                             // Obtener preguntas de la evaluación
                                             const questions = await manager.query(`
                                                 SELECT * FROM questions WHERE evaluation_id = ?
                                             `, [evalDetail.id_evaluation]);
-
+                                        
                                             // Crear respuestas para cada pregunta
                                             for (const question of questions) {
                                                 // Verificar si ya existe una respuesta para esta pregunta
@@ -846,7 +860,7 @@ export class ProgressService {
                                                             WHERE question_id = ? AND correct = 1
                                                             LIMIT 1
                                                         `, [question.id]);
-
+                                        
                                                         // Si no hay opción correcta, obtener la primera
                                                         const optionId = option.length > 0
                                                             ? option[0].id
@@ -855,7 +869,7 @@ export class ProgressService {
                                                             WHERE question_id = ? 
                                                             LIMIT 1
                                                         `, [question.id]))[0]?.id;
-
+                                        
                                                         if (optionId) {
                                                             await manager.query(`
                                                                 INSERT INTO answers (evaluation_id, question_id, option_id, user_id, content, created_at, updated_at)
@@ -865,7 +879,14 @@ export class ProgressService {
                                                     }
                                                     this.logger.log(`Creada respuesta para question_id=${question.id}, user_id=${user.id}`);
                                                 } else {
-                                                    this.logger.log(`Respuesta ya existe para question_id=${question.id}, user_id=${user.id}`);
+                                                    // Actualizar fechas para respuestas existentes
+                                                    await manager.query(`
+                                                        UPDATE answers 
+                                                        SET created_at = ?, updated_at = ? 
+                                                        WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
+                                                    `, [firstProgressDate, lastProgressDate, evalDetail.id_evaluation, question.id, user.id]);
+                                                    
+                                                    this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}`);
                                                 }
                                             }
                                         } else {
