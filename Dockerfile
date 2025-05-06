@@ -26,6 +26,9 @@ COPY --from=deps /usr/src/app/package.json /usr/src/app/package-lock.json* ./
 # Copia el directorio 'dist' compilado desde el builder
 COPY --from=builder /usr/src/app/dist ./dist
 
+COPY --from=builder /usr/src/app/views ./views
+COPY --from=builder /usr/src/app/public ./public
+
 # Copia los node_modules de producción (alternativa a reinstalar)
 # Esto es generalmente más rápido y usa los módulos exactos del paso 'deps'/'builder'
 # Asegúrate de que `npm prune --production` NO se ejecutó en el builder si usas esta opción.
