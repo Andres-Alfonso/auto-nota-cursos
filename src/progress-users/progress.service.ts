@@ -168,7 +168,7 @@ export class ProgressService {
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            const [month, day, year] = parts;
+                            const [day, month, year] = parts;
                             
                             // Siempre asumir formato DD/MM/YYYY
                             date = new Date(year, month - 1, day);
