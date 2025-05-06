@@ -13,8 +13,8 @@ export class Answer {
   @Column({ type: 'int', unsigned: true })
   evaluation_id: number;
 
-  @Column({ type: 'text', nullable: true })
-  response: string;
+  // @Column({ type: 'text', nullable: true })
+  // response: string;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'user_id' })

@@ -29,4 +29,7 @@ export class User {
 
   @Column({ name: 'client_id' })
   client_id: number;
+
+  @Column({ name: 'last_login_at', type: 'timestamp', nullable: true })
+  last_login_at: Date;
 }
