@@ -144,6 +144,8 @@ export class ProgressService {
                     if (!dateStr || dateStr.trim() === '') {
                         return formatDateForMySQL(new Date()); // Usar fecha actual si no hay fecha
                     }
+
+                    dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
                     
                     // Manejar casos especiales como '01/00/1900'
                     if (dateStr.includes('00/') || dateStr.includes('/00')) {
