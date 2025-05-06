@@ -285,6 +285,7 @@ export class ProgressService {
                             }
 
 
+                            this.logger.log(`Fecha antes de parseo ${row[courseColumn.fechaValidacionIndex]}`);
                             // Obtener fecha de validación si está disponible
                             let fechaValidacion = parseDate(row[courseColumn.fechaValidacionIndex]?.toString().trim());
                             this.logger.log(`Fechas ${fechaValidacion}`);
