@@ -38,6 +38,8 @@ services:
       dockerfile: Dockerfile
       target: production
     restart: unless-stopped
+    volumes:
+      - ./:/usr/src/app/uploads
     ports:
       - "1905:3000" # Puerto estándar en host para producción (o el que necesites)
     environment:
