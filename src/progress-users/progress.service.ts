@@ -126,16 +126,88 @@ export class ProgressService {
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
                 const formatDateForMySQL = (date: Date) => {
+                    // Verificar si la fecha es válida
+                    if (isNaN(date.getTime())) {
+                        // Si la fecha no es válida, devolver la fecha actual
+                        return new Date().toISOString().slice(0, 19).replace("T", " ");
+                    }
+                    
+                    // Verificar que la fecha no sea anterior a un límite razonable (ej: 1970)
+                    if (date.getFullYear() < 1970) {
+                        // Si la fecha es demasiado antigua, usar fecha actual
+                        return new Date().toISOString().slice(0, 19).replace("T", " ");
+                    }
+                    
                     return date.toISOString().slice(0, 19).replace("T", " "); // Formato: 'YYYY-MM-DD HH:MM:SS'
                 };
                 const parseDate = (dateStr: string): string => {
-                    if (!dateStr) return new Date().toISOString().slice(0, 19).replace('T', ' '); 
-                
-                    const [month, day, year] = dateStr.split('/').map(Number); 
-                    const fullYear = year < 100 ? 2000 + year : year; // Maneja años de 2 dígitos
-                    const date = new Date(fullYear, month - 1, day); 
-                
-                    return date.toISOString().slice(0, 19).replace('T', ' '); // Formato `YYYY-MM-DD HH:MM:SS`
+                    if (!dateStr || dateStr.trim() === '') {
+                        return formatDateForMySQL(new Date()); // Usar fecha actual si no hay fecha
+                    }
+                    
+                    // Manejar casos especiales como '01/00/1900'
+                    if (dateStr.includes('00/') || dateStr.includes('/00')) {
+                        this.logger.log(`Fecha inválida detectada: ${dateStr}, usando fecha actual`);
+                        return formatDateForMySQL(new Date());
+                    }
+                    
+                    try {
+                        let date: Date;
+                        
+                        // Comprobar si es formato DD/MM/YYYY
+                        if (dateStr.includes('/')) {
+                            const parts = dateStr.split('/').map(p => parseInt(p.trim(), 10));
+
+                            // this.logger.log(parts);
+                            
+                            // Si alguna parte no es un número, usar fecha actual
+                            if (parts.some(isNaN)) {
+                                this.logger.log(`Formato de fecha inválido: ${dateStr}, usando fecha actual`);
+                                return formatDateForMySQL(new Date());
+                            }
+                            
+                            const [month, day, year] = parts;
+                            
+                            // Siempre asumir formato DD/MM/YYYY
+                            date = new Date(year, month - 1, day);
+                            
+                            // Manejar años de 2 dígitos
+                            if (year < 100) {
+                                date.setFullYear(2000 + year);
+                            }
+                        } else if (dateStr.includes('-')) {
+                            // Para formato con guiones, dividir y ordenar como DD/MM/YYYY
+                            const parts = dateStr.split('-').map(p => parseInt(p.trim(), 10));
+                            
+                            if (parts.length === 3) {
+                                // Asumir que viene como DD-MM-YYYY
+                                const [day, month, year] = parts;
+                                date = new Date(year, month - 1, day);
+                                
+                                // Manejar años de 2 dígitos
+                                if (year < 100) {
+                                    date.setFullYear(2000 + year);
+                                }
+                            } else {
+                                // Si no tiene 3 partes, intentar parsear directamente
+                                date = new Date(dateStr);
+                            }
+                        } else {
+                            // Intentar parsear directamente
+                            date = new Date(dateStr);
+                        }
+                        
+                        // Verificar si la fecha resultante es válida
+                        if (isNaN(date.getTime()) || date.getFullYear() < 1970) {
+                            this.logger.log(`Fecha inválida después del parseo: ${dateStr}, usando fecha actual`);
+                            return formatDateForMySQL(new Date());
+                        }
+                        
+                        return formatDateForMySQL(date);
+                    } catch (error) {
+                        this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
+                        return formatDateForMySQL(new Date());
+                    }
                 };
                 let firstProgressDate = formatDateForMySQL(new Date());  // Si no hay fecha específica, usar la fecha actual
                 let lastProgressDate = formatDateForMySQL(new Date());
