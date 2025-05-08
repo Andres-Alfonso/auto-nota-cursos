@@ -119,7 +119,7 @@ import {
 
         // Construir ruta del archivo
         const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
-        const filePath = path.join(uploadsDir, 'reports', sanitizedFilename);
+        const filePath = path.join(uploadsDir, 'reports/course-status', sanitizedFilename);
 
         // Verificar si el archivo existe
         if (!fs.existsSync(filePath)) {
