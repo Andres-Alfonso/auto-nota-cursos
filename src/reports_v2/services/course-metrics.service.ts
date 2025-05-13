@@ -1197,6 +1197,9 @@ export class CourseMetricsService {
     type: string,
     data: any
   ): Promise<number> {
+    // Crear fecha con zona horaria de Bogotá
+    const bogotaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+
     const notification = this.notificationsRepository.create({
         user_id: userId,
         title,
@@ -1204,8 +1207,8 @@ export class CourseMetricsService {
         type,
         data,
         read: false,
-        created_at: new Date(),
-        updated_at: new Date()
+        created_at: bogotaDate,
+        updated_at: bogotaDate
     });
     
     const result = await this.notificationsRepository.save(notification);
@@ -1223,12 +1226,16 @@ export class CourseMetricsService {
     data: any,
     read: boolean = false
   ): Promise<void> {
+    // Crear fecha con zona horaria de Bogotá
+    const bogotaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+
     await this.notificationsRepository.update(notificationId, {
       title,
       message,
       type,
       data,
-      read
+      read,
+      updated_at: bogotaDate
     });
   }
 }
