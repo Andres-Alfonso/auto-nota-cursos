@@ -121,82 +121,118 @@ export class ProgressService {
             for (const col of courseColumns) {
                 this.logger.log(`Curso: ${col.name}, índices: ${JSON.stringify(col)}`);
             }
+
+            const formatDateForMySQL = (date: Date) => {
+                // Formato YYYY-MM-DD HH:MM:SS
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                const seconds = String(date.getSeconds()).padStart(2, '0');
+                
+                return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+            };
+            const parseDate = (dateStr: string): string => {
+                if (!dateStr || dateStr.trim() === '') {
+                    return formatDateForMySQL(new Date());
+                }
+            
+                // Limpieza inicial - eliminar comillas y espacios
+                dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
+                
+                this.logger.log(`Parseando fecha: ${dateStr}`);
+                
+                try {
+                    // Para cualquier formato con /
+                    if (dateStr.includes('/')) {
+                        const parts = dateStr.split('/');
+                        
+                        // Verificar que tenemos exactamente 3 partes
+                        if (parts.length !== 3) {
+                            this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
+                            return formatDateForMySQL(new Date());
+                        }
+                        
+                        // Convertir a números 
+                        const part1 = parseInt(parts[0].trim(), 10);
+                        const part2 = parseInt(parts[1].trim(), 10);
+                        let part3 = parseInt(parts[2].trim(), 10);
+                        
+                        // Validación básica de los números
+                        if (isNaN(part1) || isNaN(part2) || isNaN(part3)) {
+                            this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
+                            return formatDateForMySQL(new Date());
+                        }
+                        
+                        // Determinar el formato de la fecha
+                        let day, month, year;
+                        
+                        // Si part2 > 12, entonces es probablemente DD/MM/YYYY
+                        if (part2 > 12) {
+                            day = part1;
+                            month = part2;
+                            year = part3;
+                            this.logger.log(`Detectado formato DD/MM/YYYY`);
+                        } 
+                        // Si part1 > 12, entonces es probablemente MM/DD/YYYY
+                        else if (part1 > 12) {
+                            day = part2;
+                            month = part1;
+                            year = part3;
+                            this.logger.log(`Detectado formato MM/DD/YYYY`);
+                        }
+                        // Si ambos son <= 12, intentar usar la lógica del contexto
+                        else {
+                            // Asumimos que el formato es MM/DD/YY para fechas estadounidenses
+                            // como 3/19/25 (19 de marzo de 2025)
+                            month = part1;
+                            day = part2;
+                            year = part3;
+                            this.logger.log(`Formato ambiguo, asumiendo MM/DD/YY`);
+                        }
+                        
+                        // Validación de rangos
+                        if (day < 1 || day > 31 || month < 1 || month > 12) {
+                            this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
+                            return formatDateForMySQL(new Date());
+                        }
+                        
+                        // Manejar años de 2 dígitos
+                        if (year < 100) {
+                            year = 2000 + year;
+                            this.logger.log(`Año de 2 dígitos convertido a ${year}`);
+                        }
+                        
+                        // Formato directo para MySQL sin usar el objeto Date
+                        const formattedYear = String(year).padStart(4, '0');
+                        const formattedMonth = String(month).padStart(2, '0');
+                        const formattedDay = String(day).padStart(2, '0');
+                        
+                        const formattedDate = `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
+                        this.logger.log(`Fecha formateada: ${formattedDate}`);
+                        return formattedDate;
+                    }
+                    
+                    // Si llegamos aquí, el formato no es el esperado
+                    this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
+                    return formatDateForMySQL(new Date());
+                } catch (error) {
+                    this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
+                    return formatDateForMySQL(new Date());
+                }
+            };
     
             // Procesar cada fila en una transacción
             for (const row of rows) {
                 this.logger.warn(`Procesando fila ${rowIndex}...`);
+                // Reiniciar variables para cada fila
+                let firstProgressDate = formatDateForMySQL(new Date());
+                let lastProgressDate = formatDateForMySQL(new Date());
+                
                 const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
-                const formatDateForMySQL = (date: Date) => {
-                    // Formato YYYY-MM-DD HH:MM:SS
-                    const year = date.getFullYear();
-                    const month = String(date.getMonth() + 1).padStart(2, '0');
-                    const day = String(date.getDate()).padStart(2, '0');
-                    const hours = String(date.getHours()).padStart(2, '0');
-                    const minutes = String(date.getMinutes()).padStart(2, '0');
-                    const seconds = String(date.getSeconds()).padStart(2, '0');
-                    
-                    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-                };
-                const parseDate = (dateStr: string): string => {
-                    if (!dateStr || dateStr.trim() === '') {
-                        return formatDateForMySQL(new Date());
-                    }
-                
-                    // Limpieza inicial - eliminar comillas y espacios
-                    dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
-                    
-                    this.logger.log(`Parseando fecha: ${dateStr}`);
-                    
-                    try {
-                        // Para el formato explícito DD/MM/YYYY que muestras en el ejemplo
-                        if (dateStr.includes('/')) {
-                            const parts = dateStr.split('/');
-                            
-                            // Verificar que tenemos exactamente 3 partes
-                            if (parts.length !== 3) {
-                                this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
-                                return formatDateForMySQL(new Date());
-                            }
-                            
-                            // Convertir a números - explícitamente asumiendo DD/MM/YYYY
-                            const day = parseInt(parts[0].trim(), 10);
-                            const month = parseInt(parts[1].trim(), 10);
-                            let year = parseInt(parts[2].trim(), 10);
-                            
-                            // Validación básica de los números
-                            if (isNaN(day) || isNaN(month) || isNaN(year)) {
-                                this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
-                                return formatDateForMySQL(new Date());
-                            }
-                            
-                            // Validación de rangos
-                            if (day < 1 || day > 31 || month < 1 || month > 12) {
-                                this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
-                                return formatDateForMySQL(new Date());
-                            }
-                            
-                            // Formato directo para MySQL sin usar el objeto Date
-                            // Esto evita cualquier manipulación inesperada de zona horaria
-                            const formattedYear = String(year).padStart(4, '0');
-                            const formattedMonth = String(month).padStart(2, '0');
-                            const formattedDay = String(day).padStart(2, '0');
-                            
-                            // Crear la fecha en formato YYYY-MM-DD para MySQL
-                            return `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
-                        }
-                        
-                        // Si llegamos aquí, el formato no es el esperado
-                        this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
-                        return formatDateForMySQL(new Date());
-                    } catch (error) {
-                        this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
-                        return formatDateForMySQL(new Date());
-                    }
-                };
-                let firstProgressDate = formatDateForMySQL(new Date());  // Si no hay fecha específica, usar la fecha actual
-                let lastProgressDate = formatDateForMySQL(new Date());
     
                 try {
                         // Buscar usuario por identificación o correo
@@ -230,11 +266,17 @@ export class ProgressService {
     
                         // Procesar cada curso en la fila
                         for (const courseColumn of courseColumns) {
+
+                            // Reiniciar variables para cada curso
+                            let courseValue: string = '';
+                            let calificacionValue: string = '';
+                            let fechaValidacion: string = formatDateForMySQL(new Date());
+
                             // Mostrar información de debugging
                             this.logger.log(`Procesando curso: ${courseColumn.name}`);
                             
                             // Obtener el valor del curso (APROBADO/NO APLICA)
-                            const courseValue = row[courseColumn.index]?.toString().trim();
+                            courseValue = row[courseColumn.index]?.toString().trim();
                             
                             this.logger.log(`Valor del curso: ${courseValue}`);
                             
@@ -251,7 +293,7 @@ export class ProgressService {
                             //     continue;
                             // }
 
-                            const calificacionValue = row[courseColumn.calificacionIndex]?.toString().trim();
+                            calificacionValue = row[courseColumn.calificacionIndex]?.toString().trim();
                             this.logger.log(`Calificación: ${calificacionValue}`);
                             
                             // NUEVA LÓGICA: Verificar si está APROBADO y tiene calificación
@@ -271,7 +313,9 @@ export class ProgressService {
 
                             this.logger.log(`Fecha antes de parseo ${row[courseColumn.fechaValidacionIndex]}`);
                             // Obtener fecha de validación si está disponible
-                            let fechaValidacion = parseDate(row[courseColumn.fechaValidacionIndex]?.toString().trim());
+                            fechaValidacion = row[courseColumn.fechaValidacionIndex] ? 
+                                parseDate(row[courseColumn.fechaValidacionIndex].toString().trim()) : 
+                                formatDateForMySQL(new Date());
                             this.logger.log(`Fechas ${fechaValidacion}`);
 
                             if (fechaValidacion) { // Solo asigna si fechaValidacion tiene un valor
@@ -382,9 +426,11 @@ export class ProgressService {
                             
                             // Convertir calificación a número
                             let notaCalificacion = 0; // Valor por defecto
-                            const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
-                            if (numMatch) {
-                                notaCalificacion = parseFloat(numMatch[0]);
+                            if (calificacionValue) {  // Verificar que no sea string vacío antes de usar match
+                                const numMatch = calificacionValue.match(/\d+(\.\d+)?/);
+                                if (numMatch) {
+                                    notaCalificacion = parseFloat(numMatch[0]);
+                                }
                             }
 
                             this.logger.log(`Nota calificación procesada: ${notaCalificacion}`);
