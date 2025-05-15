@@ -165,32 +165,12 @@ export class ProgressService {
                             return formatDateForMySQL(new Date());
                         }
                         
-                        // Determinar el formato de la fecha
-                        let day, month, year;
+                        // Forzar interpretación como DD/MM/YYYY para todas las fechas
+                        const day = part1;
+                        const month = part2;
+                        let year = part3;
                         
-                        // Si part2 > 12, entonces es probablemente DD/MM/YYYY
-                        if (part2 > 12) {
-                            day = part1;
-                            month = part2;
-                            year = part3;
-                            this.logger.log(`Detectado formato DD/MM/YYYY`);
-                        } 
-                        // Si part1 > 12, entonces es probablemente MM/DD/YYYY
-                        else if (part1 > 12) {
-                            day = part2;
-                            month = part1;
-                            year = part3;
-                            this.logger.log(`Detectado formato MM/DD/YYYY`);
-                        }
-                        // Si ambos son <= 12, intentar usar la lógica del contexto
-                        else {
-                            // Asumimos que el formato es MM/DD/YY para fechas estadounidenses
-                            // como 3/19/25 (19 de marzo de 2025)
-                            month = part1;
-                            day = part2;
-                            year = part3;
-                            this.logger.log(`Formato ambiguo, asumiendo MM/DD/YY`);
-                        }
+                        this.logger.log(`Interpretando como DD/MM/YYYY: día=${day}, mes=${month}, año=${year}`);
                         
                         // Validación de rangos
                         if (day < 1 || day > 31 || month < 1 || month > 12) {
