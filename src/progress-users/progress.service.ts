@@ -121,91 +121,111 @@ export class ProgressService {
             for (const col of courseColumns) {
                 this.logger.log(`Curso: ${col.name}, índices: ${JSON.stringify(col)}`);
             }
-
-            const formatDateForMySQL = (date: Date) => {
-                // Formato YYYY-MM-DD HH:MM:SS
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-                const hours = String(date.getHours()).padStart(2, '0');
-                const minutes = String(date.getMinutes()).padStart(2, '0');
-                const seconds = String(date.getSeconds()).padStart(2, '0');
-                
-                return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-            };
-            const parseDate = (dateStr: string): string => {
-                if (!dateStr || dateStr.trim() === '') {
-                    return formatDateForMySQL(new Date());
-                }
-            
-                // Limpieza inicial - eliminar comillas y espacios
-                dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
-                
-                this.logger.log(`Parseando fecha: ${dateStr}`);
-                
-                try {
-                    // Para cualquier formato con /
-                    if (dateStr.includes('/')) {
-                        const parts = dateStr.split('/');
-                        
-                        // Verificar que tenemos exactamente 3 partes
-                        if (parts.length !== 3) {
-                            this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
-                            return formatDateForMySQL(new Date());
-                        }
-                        
-                        // Convertir a números 
-                        const part1 = parseInt(parts[0].trim(), 10);
-                        const part2 = parseInt(parts[1].trim(), 10);
-                        let part3 = parseInt(parts[2].trim(), 10);
-                        
-                        // Validación básica de los números
-                        if (isNaN(part1) || isNaN(part2) || isNaN(part3)) {
-                            this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
-                            return formatDateForMySQL(new Date());
-                        }
-                        
-                        // Forzar interpretación como DD/MM/YYYY para todas las fechas
-                        const day = part1;
-                        const month = part2;
-                        let year = part3;
-                        
-                        this.logger.log(`Interpretando como DD/MM/YYYY: día=${day}, mes=${month}, año=${year}`);
-                        
-                        // Validación de rangos
-                        if (day < 1 || day > 31 || month < 1 || month > 12) {
-                            this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
-                            return formatDateForMySQL(new Date());
-                        }
-                        
-                        // Manejar años de 2 dígitos
-                        if (year < 100) {
-                            year = 2000 + year;
-                            this.logger.log(`Año de 2 dígitos convertido a ${year}`);
-                        }
-                        
-                        // Formato directo para MySQL sin usar el objeto Date
-                        const formattedYear = String(year).padStart(4, '0');
-                        const formattedMonth = String(month).padStart(2, '0');
-                        const formattedDay = String(day).padStart(2, '0');
-                        
-                        const formattedDate = `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
-                        this.logger.log(`Fecha formateada: ${formattedDate}`);
-                        return formattedDate;
-                    }
-                    
-                    // Si llegamos aquí, el formato no es el esperado
-                    this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
-                    return formatDateForMySQL(new Date());
-                } catch (error) {
-                    this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
-                    return formatDateForMySQL(new Date());
-                }
-            };
     
             // Procesar cada fila en una transacción
             for (const row of rows) {
                 this.logger.warn(`Procesando fila ${rowIndex}...`);
+
+                const formatDateForMySQL = (date: Date) => {
+                    // Formato YYYY-MM-DD HH:MM:SS
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const hours = String(date.getHours()).padStart(2, '0');
+                    const minutes = String(date.getMinutes()).padStart(2, '0');
+                    const seconds = String(date.getSeconds()).padStart(2, '0');
+                    
+                    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                };
+                const parseDate = (dateStr: string): string => {
+                    if (!dateStr || dateStr.trim() === '') {
+                        return formatDateForMySQL(new Date());
+                    }
+                
+                    // Limpieza inicial - eliminar comillas y espacios
+                    dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
+                    
+                    this.logger.log(`Parseando fecha: ${dateStr}`);
+                    
+                    try {
+                        // Para cualquier formato con /
+                        if (dateStr.includes('/')) {
+                            const parts = dateStr.split('/');
+                            
+                            // Verificar que tenemos exactamente 3 partes
+                            if (parts.length !== 3) {
+                                this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
+                                return formatDateForMySQL(new Date());
+                            }
+                            
+                            // Convertir a números 
+                            const part1 = parseInt(parts[0].trim(), 10);
+                            const part2 = parseInt(parts[1].trim(), 10);
+                            let part3 = parseInt(parts[2].trim(), 10);
+                            
+                            // Validación básica de los números
+                            if (isNaN(part1) || isNaN(part2) || isNaN(part3)) {
+                                this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
+                                return formatDateForMySQL(new Date());
+                            }
+                            
+                            // Determinar el formato de la fecha
+                            let day: number, month: number, year: number;
+                            
+                            // Si la primera parte es > 12, entonces probablemente es DD/MM/YYYY
+                            if (part1 > 12) {
+                                day = part1;
+                                month = part2;
+                                year = part3;
+                                this.logger.log(`Detectado formato DD/MM/YYYY`);
+                            } 
+                            // Si la segunda parte es > 12, entonces probablemente es MM/DD/YYYY
+                            else if (part2 > 12) {
+                                month = part1;
+                                day = part2;
+                                year = part3;
+                                this.logger.log(`Detectado formato MM/DD/YYYY`);
+                            }
+                            // Para el caso específico de Colombia, asumimos DD/MM/YYYY
+                            else {
+                                // En Latinoamérica, el formato más común es DD/MM/YYYY
+                                day = part1;
+                                month = part2;
+                                year = part3;
+                                this.logger.log(`Formato ambiguo, asumiendo DD/MM/YYYY (formato colombiano)`);
+                            }
+                            
+                            // Validación de rangos
+                            if (day < 1 || day > 31 || month < 1 || month > 12) {
+                                this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
+                                return formatDateForMySQL(new Date());
+                            }
+                            
+                            // Manejar años de 2 dígitos
+                            if (year < 100) {
+                                year = 2000 + year;
+                                this.logger.log(`Año de 2 dígitos convertido a ${year}`);
+                            }
+                            
+                            // Formato directo para MySQL sin usar el objeto Date
+                            const formattedYear = String(year).padStart(4, '0');
+                            const formattedMonth = String(month).padStart(2, '0');
+                            const formattedDay = String(day).padStart(2, '0');
+                            
+                            const formattedDate = `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
+                            this.logger.log(`Fecha formateada: ${formattedDate}`);
+                            return formattedDate;
+                        }
+                        
+                        // Si llegamos aquí, el formato no es el esperado
+                        this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
+                        return formatDateForMySQL(new Date());
+                    } catch (error) {
+                        this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
+                        return formatDateForMySQL(new Date());
+                    }
+                };
+
                 // Reiniciar variables para cada fila
                 let firstProgressDate = formatDateForMySQL(new Date());
                 let lastProgressDate = formatDateForMySQL(new Date());
