@@ -21,6 +21,7 @@ import { UserProgressActivityVideoRoom } from './entities/user-progress-activity
 import { DetailSelftEvaluationVideoRoom } from './entities/detail-selft-evaluation-videoroom.entity';
 import { UserProgressSelftEvaluationVideoRoom } from './entities/user-progress-selft-evaluation.entity';
 import { ClubTranslation } from './entities/club_translations.entity';
+// import { NotificationZone } from '../reports_v2/entities/notification-zone.entity';
 import { ClubUser } from './entities/club-user.entity';
 import * as ExcelJS from 'exceljs';
 import * as fs from 'fs';
@@ -63,6 +64,8 @@ export class ProgressService {
         private clubUserRepository: Repository<ClubUser>,
         @InjectRepository(Club)
         private clubRepository: Repository<Club>,
+        // @InjectRepository(NotificationZone)
+        // private notificationsRepository: Repository<NotificationZone>,
         private dataSource: DataSource,
     ) { }
 
@@ -126,86 +129,67 @@ export class ProgressService {
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
                 const formatDateForMySQL = (date: Date) => {
-                    // Verificar si la fecha es válida
-                    if (isNaN(date.getTime())) {
-                        // Si la fecha no es válida, devolver la fecha actual
-                        return new Date().toISOString().slice(0, 19).replace("T", " ");
-                    }
+                    // Formato YYYY-MM-DD HH:MM:SS
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const hours = String(date.getHours()).padStart(2, '0');
+                    const minutes = String(date.getMinutes()).padStart(2, '0');
+                    const seconds = String(date.getSeconds()).padStart(2, '0');
                     
-                    // Verificar que la fecha no sea anterior a un límite razonable (ej: 1970)
-                    if (date.getFullYear() < 1970) {
-                        // Si la fecha es demasiado antigua, usar fecha actual
-                        return new Date().toISOString().slice(0, 19).replace("T", " ");
-                    }
-                    
-                    return date.toISOString().slice(0, 19).replace("T", " "); // Formato: 'YYYY-MM-DD HH:MM:SS'
+                    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
                 };
                 const parseDate = (dateStr: string): string => {
                     if (!dateStr || dateStr.trim() === '') {
-                        return formatDateForMySQL(new Date()); // Usar fecha actual si no hay fecha
-                    }
-
-                    dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
-                    
-                    // Manejar casos especiales como '01/00/1900'
-                    if (dateStr.includes('00/') || dateStr.includes('/00')) {
-                        this.logger.log(`Fecha inválida detectada: ${dateStr}, usando fecha actual`);
                         return formatDateForMySQL(new Date());
                     }
+                
+                    // Limpieza inicial - eliminar comillas y espacios
+                    dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
+                    
+                    this.logger.log(`Parseando fecha: ${dateStr}`);
                     
                     try {
-                        let date: Date;
-                        
-                        // Comprobar si es formato DD/MM/YYYY
+                        // Para el formato explícito DD/MM/YYYY que muestras en el ejemplo
                         if (dateStr.includes('/')) {
-                            const parts = dateStr.split('/').map(p => parseInt(p.trim(), 10));
-
-                            // this.logger.log(parts);
+                            const parts = dateStr.split('/');
                             
-                            // Si alguna parte no es un número, usar fecha actual
-                            if (parts.some(isNaN)) {
-                                this.logger.log(`Formato de fecha inválido: ${dateStr}, usando fecha actual`);
+                            // Verificar que tenemos exactamente 3 partes
+                            if (parts.length !== 3) {
+                                this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            const [day, month, year] = parts;
+                            // Convertir a números - explícitamente asumiendo DD/MM/YYYY
+                            const day = parseInt(parts[0].trim(), 10);
+                            const month = parseInt(parts[1].trim(), 10);
+                            let year = parseInt(parts[2].trim(), 10);
                             
-                            // Siempre asumir formato DD/MM/YYYY
-                            date = new Date(year, month - 1, day);
-                            
-                            // Manejar años de 2 dígitos
-                            if (year < 100) {
-                                date.setFullYear(2000 + year);
+                            // Validación básica de los números
+                            if (isNaN(day) || isNaN(month) || isNaN(year)) {
+                                this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
+                                return formatDateForMySQL(new Date());
                             }
-                        } else if (dateStr.includes('-')) {
-                            // Para formato con guiones, dividir y ordenar como DD/MM/YYYY
-                            const parts = dateStr.split('-').map(p => parseInt(p.trim(), 10));
                             
-                            if (parts.length === 3) {
-                                // Asumir que viene como DD-MM-YYYY
-                                const [day, month, year] = parts;
-                                date = new Date(year, month - 1, day);
-                                
-                                // Manejar años de 2 dígitos
-                                if (year < 100) {
-                                    date.setFullYear(2000 + year);
-                                }
-                            } else {
-                                // Si no tiene 3 partes, intentar parsear directamente
-                                date = new Date(dateStr);
+                            // Validación de rangos
+                            if (day < 1 || day > 31 || month < 1 || month > 12) {
+                                this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
+                                return formatDateForMySQL(new Date());
                             }
-                        } else {
-                            // Intentar parsear directamente
-                            date = new Date(dateStr);
+                            
+                            // Formato directo para MySQL sin usar el objeto Date
+                            // Esto evita cualquier manipulación inesperada de zona horaria
+                            const formattedYear = String(year).padStart(4, '0');
+                            const formattedMonth = String(month).padStart(2, '0');
+                            const formattedDay = String(day).padStart(2, '0');
+                            
+                            // Crear la fecha en formato YYYY-MM-DD para MySQL
+                            return `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
                         }
                         
-                        // Verificar si la fecha resultante es válida
-                        if (isNaN(date.getTime()) || date.getFullYear() < 1970) {
-                            this.logger.log(`Fecha inválida después del parseo: ${dateStr}, usando fecha actual`);
-                            return formatDateForMySQL(new Date());
-                        }
-                        
-                        return formatDateForMySQL(date);
+                        // Si llegamos aquí, el formato no es el esperado
+                        this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
+                        return formatDateForMySQL(new Date());
                     } catch (error) {
                         this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
                         return formatDateForMySQL(new Date());
@@ -924,6 +908,14 @@ export class ProgressService {
                 usersNotFound: usersNotFoundCount,
                 usersAddedToClub
             });
+
+            // const notificationId = await this.createNotification(
+            //     userId,
+            //     'Generando Reporte de Estatus por Curso',
+            //     'El reporte está siendo generado. Esto puede tomar unos minutos.',
+            //     'info',
+            //     { reportType: 'course_status', status: 'processing' }
+            // );
     
             return {
                 message: 'Proceso completado',
@@ -943,6 +935,58 @@ export class ProgressService {
             );
         }
     }
+
+    /**
+     * Crea una notificación en la base de datos
+     */
+    // private async createNotification(
+    //     userId: number,
+    //     title: string,
+    //     message: string,
+    //     type: string,
+    //     data: any
+    // ): Promise<number> {
+    //     // Crear fecha con zona horaria de Bogotá
+    //     const bogotaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+
+    //     const notification = this.notificationsRepository.create({
+    //         user_id: userId,
+    //         title,
+    //         message,
+    //         type,
+    //         data,
+    //         read: false,
+    //         created_at: bogotaDate,
+    //         updated_at: bogotaDate
+    //     });
+        
+    //     const result = await this.notificationsRepository.save(notification);
+    //     return result.id;
+    // }
+
+    // /**
+    //  * Actualiza una notificación existente
+    //  */
+    // private async updateNotification(
+    //     notificationId: number,
+    //     title: string,
+    //     message: string,
+    //     type: string,
+    //     data: any,
+    //     read: boolean = false
+    // ): Promise<void> {
+    //     // Crear fecha con zona horaria de Bogotá
+    //     const bogotaDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+
+    //     await this.notificationsRepository.update(notificationId, {
+    //     title,
+    //     message,
+    //     type,
+    //     data,
+    //     read,
+    //     updated_at: bogotaDate
+    //     });
+    // }
 
     async clubUserExcelFile(filePath: string, clubId?: number, clientId?: number): Promise<any> {
         try {
