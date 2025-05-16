@@ -22,6 +22,27 @@ import { diskStorage, Multer } from 'multer';
 import { ExternalService } from './services/external.service';
 
 
+// Definir el lugar donde se guardarán los archivos
+const storageConfig = diskStorage({
+  destination: (req, file, cb) => {
+    // Crear directorio si no existe
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+    const certificatesDir = path.join(uploadsDir, 'certificates_externals');
+    
+    if (!fs.existsSync(certificatesDir)) {
+      fs.mkdirSync(certificatesDir, { recursive: true });
+    }
+    
+    cb(null, certificatesDir);
+  },
+  filename: (req, file, cb) => {
+    // Obtener nombre de archivo de los datos JSON
+    const jsonData = JSON.parse(req.body.data);
+    const fileName = jsonData.filename || `certificados_externos_${Date.now()}.csv`;
+    cb(null, fileName);
+  }
+});
+
 @Controller('api/external')
 export class ExternalController {
   private readonly logger = new Logger(ExternalController.name);
@@ -32,33 +53,63 @@ export class ExternalController {
   ) {}
 
   @Post('export-certificates')
-  async exportCertificatesToCSV(@Body() requestData: any, @Res() res: Response) {
+  @UseInterceptors(FileInterceptor('file', { storage: storageConfig }))
+  async exportCertificates(
+    @UploadedFile() file: Multer.File,
+    @Body('data') dataString: string
+  ) {
     try {
-      const { groupedCertificates, startDate, endDate, clientId } = requestData;
+      const data = JSON.parse(dataString);
+      const { clientId, startDate, endDate, filename } = data;
       
-      if (!groupedCertificates || !startDate || !endDate || !clientId) {
-        throw new HttpException('Faltan datos obligatorios', HttpStatus.BAD_REQUEST);
+      if (!file) {
+        throw new HttpException('No se proporcionó ningún archivo', HttpStatus.BAD_REQUEST);
       }
       
-      // Nombre del archivo
-      const fileName = `certificados_externos_${startDate}_${endDate}.csv`;
+      // La URL base para la descarga del archivo
+      const baseUrl = this.configService.get<string>('APP_URL', 'https://homologation-notes.kalmsystem.com');
+      const downloadUrl = `${baseUrl}/api/external/download-certificate/${filename}`;
       
-      // Configurar headers para la respuesta
+      this.logger.log(`Archivo CSV generado: ${file.path}`);
+      
+      return {
+        statusCode: HttpStatus.OK,
+        message: 'Archivo CSV generado correctamente',
+        downloadUrl: downloadUrl,
+        fileName: filename
+      };
+    } catch (error) {
+      this.logger.error(`Error al generar el archivo CSV: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message || 'Error al generar el archivo CSV', 
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+  
+  @Get('download-certificate/:fileName')
+  async downloadCertificate(
+    @Param('fileName') fileName: string,
+    @Res() res: Response
+  ) {
+    try {
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+      const filePath = path.join(uploadsDir, 'certificates_externals', fileName);
+      
+      if (!fs.existsSync(filePath)) {
+        throw new HttpException('El archivo no existe', HttpStatus.NOT_FOUND);
+      }
+      
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Cache-Control', 'must-revalidate, post-check=0, pre-check=0');
-      res.setHeader('Expires', '0');
       
-      // Crear el stream de escritura directamente a la respuesta
-      const csvStream = this.createCsvStream(groupedCertificates);
-      
-      // Pipe el stream directamente a la respuesta
-      csvStream.pipe(res);
+      // Crear un stream de lectura y enviarlo como respuesta
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
     } catch (error) {
-      this.logger.error(`Error al exportar certificados: ${error.message}`, error.stack);
+      this.logger.error(`Error al descargar el archivo: ${error.message}`, error.stack);
       throw new HttpException(
-        error.message || 'Error al exportar certificados', 
+        error.message || 'Error al descargar el archivo', 
         error.status || HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
