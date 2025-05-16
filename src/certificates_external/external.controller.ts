@@ -30,7 +30,134 @@ export class ExternalController {
     private readonly configService: ConfigService,
     private readonly certificateExternalService: ExternalService
   ) {}
-  
+
+  @Post('export-certificates')
+  async exportCertificatesToCSV(@Body() requestData: any, @Res() res: Response) {
+    try {
+      const { groupedCertificates, startDate, endDate, clientId } = requestData;
+      
+      if (!groupedCertificates || !startDate || !endDate || !clientId) {
+        throw new HttpException('Faltan datos obligatorios', HttpStatus.BAD_REQUEST);
+      }
+      
+      // Nombre del archivo
+      const fileName = `certificados_externos_${startDate}_${endDate}.csv`;
+      
+      // Configurar headers para la respuesta
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Cache-Control', 'must-revalidate, post-check=0, pre-check=0');
+      res.setHeader('Expires', '0');
+      
+      // Crear el stream de escritura directamente a la respuesta
+      const csvStream = this.createCsvStream(groupedCertificates);
+      
+      // Pipe el stream directamente a la respuesta
+      csvStream.pipe(res);
+    } catch (error) {
+      this.logger.error(`Error al exportar certificados: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message || 'Error al exportar certificados', 
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  private createCsvStream(groupedCertificates: any) {
+    // Importar módulo para crear CSV
+    const { Transform } = require('stream');
+    const { stringify } = require('csv-stringify');
+    
+    // Crear stream de transformación para procesar los datos
+    const transformStream = new Transform({
+      objectMode: true,
+      transform(chunk, encoding, callback) {
+        callback(null, chunk);
+      }
+    });
+    
+    // Configurar el stringifier CSV
+    const stringifier = stringify({
+      header: true,
+      columns: {
+        'Estado': 'estado',
+        'Cedula': 'cedula',
+        'Nombre': 'nombre',
+        'Apellido': 'apellido',
+        'Correo': 'correo',
+        'Nombre del Certificado': 'certificado',
+        'Fecha de Emisión': 'fechaEmision',
+        'Fecha de Vencimiento': 'fechaVencimiento',
+        'Estado del Certificado': 'estadoCertificado',
+        'Ruta de archivo': 'rutaArchivo'
+      }
+    });
+    
+    // Escribir los datos en el stream
+    process.nextTick(() => {
+      // Escribir cada certificado en el stream
+      for (const certificate of groupedCertificates) {
+        const certificateName = certificate.name;
+        
+        // Procesar cada usuario con sus certificados
+        for (const user of certificate.users) {
+          // Obtener nombre y apellido separados
+          const fullName = user.user_name;
+          const nameParts = fullName ? fullName.split(' ', 2) : ['N/A', 'N/A'];
+          const firstName = nameParts[0] || 'N/A';
+          const lastName = nameParts[1] || 'N/A';
+          const statusValidation = user.user_status;
+          
+          // Obtener estado
+          const status = this.translateStatus(user.status);
+          const statusUser = statusValidation;
+          
+          // Procesar cada certificado del usuario
+          for (const userCertificate of user.certificates) {
+            const issueDate = userCertificate.issue_date || 'N/A';
+            const expiryDate = userCertificate.expiry_date || 'N/A';
+            const filePath = userCertificate.file_path || '';
+            
+            // Escribir fila en el CSV
+            transformStream.push({
+              estado: statusUser,
+              cedula: user.user_identification,
+              nombre: firstName,
+              apellido: lastName,
+              correo: user.user_email,
+              certificado: certificateName,
+              fechaEmision: issueDate,
+              fechaVencimiento: expiryDate,
+              estadoCertificado: status,
+              rutaArchivo: filePath
+            });
+          }
+        }
+      }
+      
+      // Finalizar el stream
+      transformStream.push(null);
+    });
+    
+    // Conectar el stream de transformación con el stringifier
+    return transformStream.pipe(stringifier);
+  }
+
+  private translateStatus(status: string): string {
+    // Esta función debería traducir los códigos de estado a textos descriptivos
+    // similar a la función en Laravel
+    switch (status) {
+      case 'active':
+        return 'Activo';
+      case 'expired':
+        return 'Vencido';
+      case 'expiring_soon':
+        return 'Por vencer';
+      default:
+        return status || 'Desconocido';
+    }
+  }
 
   @Post('certificates-external')
   async processCorrectCertificatesExternal(@Body() requestData: any) {
