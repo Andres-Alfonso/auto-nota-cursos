@@ -30,6 +30,25 @@ export class ProgressController {
     return this.progressService.processExcelFile(file.path, clubId, clientId);
   }
 
+  @Post('uploaddates')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFileDates(
+    @UploadedFile() file: Multer.File,
+    @Body() uploadProgressDto: UploadProgressDto,
+  ) {
+    // Convertir clubId a número o pasar undefined si no existe
+    const clubId = uploadProgressDto.clubId ? 
+      parseInt(uploadProgressDto.clubId.toString(), 10) : 
+      undefined;
+
+    // Pasamos clientId si está disponible
+    const clientId = uploadProgressDto.clientId 
+      ? parseInt(uploadProgressDto.clientId.toString(), 10) 
+      : undefined;
+
+    return this.progressService.processExcelDatesFile(file.path, clubId, clientId);
+  }
+
   @Post('upload/second')
   @UseInterceptors(FileInterceptor('file'))
   async uploadSecondFile(
