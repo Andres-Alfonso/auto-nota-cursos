@@ -1,15 +1,15 @@
 // user.entity.ts
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ nullable: true })
   name: string;
 
-  @Column()
+  @Column({ nullable: true })
   last_name: string;
 
   @Column()
@@ -18,11 +18,26 @@ export class User {
   @Column({ nullable: true })
   identification: string;
 
+  @Column({
+    type: 'enum',
+    enum: ['AA', 'CC', 'CE', 'PA', 'RC', 'TI'],
+  })
+  identification_type: 'AA' | 'CC' | 'CE' | 'PA' | 'RC' | 'TI';
+
+  @Column()
+  password: string;
+
   @Column({ nullable: true })
   company: string;
 
   @Column({ nullable: true })
   charge: string;
+
+  @Column({ name: 'registerd_age_user', nullable: true })
+  registerd_age_user?: string;
+
+  @Column({name: 'registerd_sex_user', nullable: true })
+  registerd_sex_user?: string;
 
   @Column({ name: 'status_validation' })
   status_validation: string;
@@ -32,4 +47,13 @@ export class User {
 
   @Column({ name: 'last_login_at', type: 'timestamp', nullable: true })
   last_login_at: Date;
+
+  @Column({nullable: true})
+  creator_id: number;
+
+  @CreateDateColumn()
+  created_at: Date;
+
+  @UpdateDateColumn()
+  updated_at: Date;
 }

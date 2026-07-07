@@ -2,7 +2,7 @@
 import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { User } from './user.entity';
 
-@Entity('user_certificates')
+@Entity('user_certificates_resources')
 export class UserCertificate {
   @PrimaryGeneratedColumn()
   id: number;
@@ -24,6 +24,9 @@ export class UserCertificate {
 
   @Column({ type: 'datetime', nullable: true })
   expiry_date: Date;
+
+  @Column({ name: 'additional_info', nullable: true })
+  additional_info: string;
 
   @CreateDateColumn()
   created_at: Date;

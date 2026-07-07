@@ -425,32 +425,32 @@ export class UpdateProgressService {
             }
             
             // NUEVA VALIDACIÓN: Verificar la fecha de registro del usuario en el club
-            if (currentClubId) {
-                const existingClubUser = await manager.getRepository(ClubUser).findOne({
-                    where: { club_id: currentClubId, user_id: user.id }
-                });
+            // if (currentClubId) {
+            //     const existingClubUser = await manager.getRepository(ClubUser).findOne({
+            //         where: { club_id: currentClubId, user_id: user.id }
+            //     });
                 
-                // Si el usuario está registrado, verificar la fecha de registro
-                if (existingClubUser) {
-                    // Fecha límite: 25 de marzo de 2025
-                    const cutoffDate = new Date('2025-03-25');
-                    const registrationDate = new Date(existingClubUser.created_at);
+            //     // Si el usuario está registrado, verificar la fecha de registro
+            //     if (existingClubUser) {
+            //         // Fecha límite: 25 de marzo de 2025
+            //         const cutoffDate = new Date('2025-03-25');
+            //         const registrationDate = new Date(existingClubUser.created_at);
                     
-                    // Si el usuario fue registrado después de la fecha límite, no hacer nada
-                    if (registrationDate >= cutoffDate) {
-                        this.logger.log(`Usuario ID ${user.id} fue registrado en el club ID ${currentClubId} después del 25 de marzo de 2025. No se eliminarán datos.`);
+            //         // Si el usuario fue registrado después de la fecha límite, no hacer nada
+            //         if (registrationDate >= cutoffDate) {
+            //             this.logger.log(`Usuario ID ${user.id} fue registrado en el club ID ${currentClubId} después del 25 de marzo de 2025. No se eliminarán datos.`);
                         
-                        // Aquí puedes agregar cualquier otra lógica necesaria para usuarios nuevos
-                        if (processingStats.usersAlreadyInClub !== undefined) {
-                            processingStats.usersAlreadyInClub++;
-                        }
+            //             // Aquí puedes agregar cualquier otra lógica necesaria para usuarios nuevos
+            //             if (processingStats.usersAlreadyInClub !== undefined) {
+            //                 processingStats.usersAlreadyInClub++;
+            //             }
                         
-                        return; // Salir sin procesar más
-                    }
+            //             return; // Salir sin procesar más
+            //         }
                     
-                    this.logger.log(`Usuario ID ${user.id} fue registrado antes del 25 de marzo de 2025 en el club ID ${currentClubId}. Continuando con la limpieza de datos.`);
-                }
-            }
+            //         this.logger.log(`Usuario ID ${user.id} fue registrado antes del 25 de marzo de 2025 en el club ID ${currentClubId}. Continuando con la limpieza de datos.`);
+            //     }
+            // }
     
             // Process each video room found - using a loop to maintain separate context for each
             for (const videoRoom of videoRooms) {

@@ -12,7 +12,7 @@ export class UserDocument {
   user_id: number;
 
   @Column()
-  document_id: number;
+  documents_id: number;
 
   @Column({ nullable: true })
   file_path: string;
@@ -34,6 +34,6 @@ export class UserDocument {
   user: User;
 
   @ManyToOne(() => Documents)
-  @JoinColumn({ name: 'document_id' })
+  @JoinColumn({ name: 'documents_id' })
   document: Documents;
 }

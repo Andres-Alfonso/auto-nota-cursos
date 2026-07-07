@@ -7,9 +7,15 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { UpdateDataController } from './update-data.controller';
 import { UpdateDataService } from './services/update-data.service';
+import { Club } from 'src/reports_v2/entities/club.entity';
+import { ClubUser } from 'src/reports_v2/entities/club-user.entity';
+import { Client } from 'src/reports_v2/entities/client.entity';
+import { CustomField } from 'src/reports_v2/entities/custom-field.entity';
+import { CustomFieldOption } from 'src/reports_v2/entities/custom-field-option.entity';
+import { UserCustomField } from 'src/reports_v2/entities/user-custom-field.entity';
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, Club, ClubUser, Client, CustomField, CustomFieldOption, UserCustomField]),
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',

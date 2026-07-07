@@ -71,10 +71,239 @@ export class ProgressService {
 
     async processExcelFile(filePath: string, clubId?: number, clientId?: number): Promise<any> {
         try {
+
+            // Definir interfaces para los tipos
+            interface DateColumnInfo {
+                index: number;
+                name: string;
+                columnLetter: string;
+            }
+
+            interface ExcelCell {
+                v?: any;           // valor
+                w?: string;        // valor formateado
+                t?: string;        // tipo
+                z?: string;        // formato de número
+                s?: any;           // estilo
+            }
+
+            interface ExcelInspectionResult {
+                workbook: any;
+                worksheet: any;
+                dateColumns: DateColumnInfo[];
+            }
+
+            // Función para inspeccionar directamente el formato del Excel
+            const inspectExcelDateFormats = (workbook: any, worksheet: any): DateColumnInfo[] => {
+                this.logger.log(`=== INSPECCIONANDO FORMATO DE EXCEL ===`);
+                
+                // 1. INFORMACIÓN DEL WORKBOOK
+                if (workbook.Workbook) {
+                    this.logger.log(`Información del Workbook:`, JSON.stringify(workbook.Workbook, null, 2));
+                }
+                
+                // 2. INFORMACIÓN DE LA HOJA
+                const range = worksheet['!ref'];
+                this.logger.log(`Rango de la hoja: ${range}`);
+                
+                // 3. INSPECCIONAR CELDAS CON FECHAS
+                const dateColumns: DateColumnInfo[] = [];
+                
+                // Buscar columnas que contengan "fecha" en el header
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+                const headers = rows[0] as any[];
+                
+                headers.forEach((header: any, index: number) => {
+                    if (header && header.toString().toLowerCase().includes('fecha')) {
+                        dateColumns.push({
+                            index: index,
+                            name: header.toString(),
+                            columnLetter: XLSX.utils.encode_col(index)
+                        });
+                    }
+                });
+                
+                this.logger.log(`Columnas de fecha encontradas:`, dateColumns);
+                
+                // 4. INSPECCIONAR FORMATO DE CELDAS DE FECHA
+                for (const dateCol of dateColumns) {
+                    this.logger.log(`\n--- INSPECCIONANDO COLUMNA: ${dateCol.name} ---`);
+                    
+                    // Examinar las primeras 10 celdas de esta columna
+                    for (let row = 1; row <= 10; row++) {
+                        const cellAddress = dateCol.columnLetter + (row + 1).toString();
+                        const cell: ExcelCell = worksheet[cellAddress];
+                        
+                        if (cell && cell.v) {
+                            this.logger.log(`\nCelda ${cellAddress}:`);
+                            this.logger.log(`  Valor raw: ${JSON.stringify(cell.v)}`);
+                            this.logger.log(`  Tipo: ${typeof cell.v}`);
+                            this.logger.log(`  Es Date: ${cell.v instanceof Date}`);
+                            
+                            // INFORMACIÓN CRÍTICA: FORMATO DE NÚMERO
+                            if (cell.z) {
+                                this.logger.log(`  📋 Formato de número: "${cell.z}"`);
+                                
+                                // Analizar el formato
+                                const format = cell.z.toLowerCase();
+                                if (format.includes('dd/mm') || format.includes('d/m')) {
+                                    this.logger.log(`  ✅ Formato detectado: DD/MM/YYYY`);
+                                } else if (format.includes('mm/dd') || format.includes('m/d')) {
+                                    this.logger.log(`  ✅ Formato detectado: MM/DD/YYYY`);
+                                } else if (format.includes('yyyy-mm-dd')) {
+                                    this.logger.log(`  ✅ Formato detectado: ISO (YYYY-MM-DD)`);
+                                } else {
+                                    this.logger.log(`  ⚠️  Formato personalizado: ${cell.z}`);
+                                }
+                            }
+                            
+                            // FORMATO DE CELDA (si existe)
+                            if (cell.s) {
+                                this.logger.log(`  Estilo de celda:`, JSON.stringify(cell.s, null, 2));
+                            }
+                            
+                            // TIPO DE CELDA
+                            if (cell.t) {
+                                this.logger.log(`  Tipo de celda: ${cell.t}`);
+                            }
+                            
+                            // VALOR FORMATEADO
+                            if (cell.w) {
+                                this.logger.log(`  Valor formateado: "${cell.w}"`);
+                            }
+                            
+                            // Si es número serial de Excel
+                            if (typeof cell.v === 'number' && cell.v > 25000 && cell.v < 100000) {
+                                const excelDate = new Date((cell.v - 25569) * 86400 * 1000);
+                                this.logger.log(`  📅 Convertido desde serial: ${excelDate.toLocaleDateString()}`);
+                            }
+                        }
+                    }
+                }
+                
+                // 5. INFORMACIÓN DE CONFIGURACIÓN REGIONAL
+                if (workbook.Workbook && workbook.Workbook.WBProps) {
+                    this.logger.log(`\nPropiedades del Workbook:`, JSON.stringify(workbook.Workbook.WBProps, null, 2));
+                    
+                    const props = workbook.Workbook.WBProps;
+                    if (props.date1904) {
+                        this.logger.log(`📅 Sistema de fechas: 1904 (Mac)`);
+                    } else {
+                        this.logger.log(`📅 Sistema de fechas: 1900 (Windows)`);
+                    }
+                }
+                
+                return dateColumns;
+            };
+
+            // Función para leer Excel con máxima información de formato
+            const readExcelWithFullFormat = (filePath: string): ExcelInspectionResult => {
+                this.logger.log(`Leyendo Excel con información completa de formato...`);
+                
+                const workbook = XLSX.readFile(filePath, {
+                    cellNF: true,        // Formatos de número (lo más importante para fechas)
+                    cellDates: true,     // Convertir fechas automáticamente
+                    raw: false,          // Mantener formato, no raw
+                    type: 'file'         // Especificar que es un archivo
+                });
+                
+                const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                const dateColumns = inspectExcelDateFormats(workbook, worksheet);
+                
+                return { workbook, worksheet, dateColumns };
+            };
+
+            // Función para determinar formato basado en la inspección
+            const determineFormatFromExcel = (dateColumns: DateColumnInfo[], worksheet: any): string => {
+                this.logger.log(`\n=== DETERMINANDO FORMATO DESDE EXCEL ===`);
+                
+                let ddmmCount = 0;
+                let mmddCount = 0;
+                let isoCount = 0;
+                
+                for (const dateCol of dateColumns) {
+                    for (let row = 1; row <= 5; row++) {
+                        const cellAddress = dateCol.columnLetter + (row + 1).toString();
+                        const cell: ExcelCell = worksheet[cellAddress];
+                        
+                        if (cell && cell.z) {
+                            const format = cell.z.toLowerCase();
+                            
+                            if (format.includes('dd/mm') || format.includes('d/m')) {
+                                ddmmCount++;
+                            } else if (format.includes('mm/dd') || format.includes('m/d')) {
+                                mmddCount++;
+                            } else if (format.includes('yyyy-mm-dd')) {
+                                isoCount++;
+                            }
+                        }
+                    }
+                }
+                
+                this.logger.log(`Conteos de formato:`);
+                this.logger.log(`  DD/MM: ${ddmmCount}`);
+                this.logger.log(`  MM/DD: ${mmddCount}`);
+                this.logger.log(`  ISO: ${isoCount}`);
+                
+                if (ddmmCount > mmddCount && ddmmCount > isoCount) {
+                    this.logger.log(`🎯 Formato determinado desde Excel: DD/MM/YYYY`);
+                    return 'DD/MM/YYYY';
+                } else if (mmddCount > ddmmCount && mmddCount > isoCount) {
+                    this.logger.log(`🎯 Formato determinado desde Excel: MM/DD/YYYY`);
+                    return 'MM/DD/YYYY';
+                } else if (isoCount > 0) {
+                    this.logger.log(`🎯 Formato determinado desde Excel: ISO`);
+                    return 'ISO';
+                } else {
+                    this.logger.log(`⚠️ No se pudo determinar formato desde Excel, usando DD/MM/YYYY por defecto`);
+                    return 'DD/MM/YYYY';
+                }
+            };
+
+            // Versión simplificada si prefieres algo más directo
+            const getDateFormatFromExcel = (filePath: string): string => {
+                try {
+                    const workbook = XLSX.readFile(filePath, { cellNF: true });
+                    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                    
+                    // Buscar la primera celda que tenga formato de fecha
+                    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:Z100');
+                    
+                    for (let row = range.s.r; row <= Math.min(range.e.r, range.s.r + 20); row++) {
+                        for (let col = range.s.c; col <= range.e.c; col++) {
+                            const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                            const cell: ExcelCell = worksheet[cellAddress];
+                            
+                            if (cell && cell.z && typeof cell.v === 'string' && cell.v.includes('/')) {
+                                const format = cell.z.toLowerCase();
+                                this.logger.log(`Encontrado formato en ${cellAddress}: ${cell.z}`);
+                                
+                                if (format.includes('dd/mm') || format.includes('d/m')) {
+                                    return 'DD/MM/YYYY';
+                                } else if (format.includes('mm/dd') || format.includes('m/d')) {
+                                    return 'MM/DD/YYYY';
+                                }
+                            }
+                        }
+                    }
+                    
+                    return 'DD/MM/YYYY'; // Default colombiano
+                } catch (error) {
+                    this.logger.error(`Error leyendo formato de Excel: ${error.message}`);
+                    return 'DD/MM/YYYY';
+                }
+            };
+
+            this.logger.log(`🔍 Detectando formato de fecha del Excel...`);
+        
+            // OPCIÓN 1: Detección simple y rápida
+            const detectedFormat = getDateFormatFromExcel(filePath);
+            this.logger.log(`📅 Formato detectado: ${detectedFormat}`);
+
             // Leer el archivo Excel
             const workbook = XLSX.readFile(filePath);
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+            const rows: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false});
     
             let successCount = 0;
             let errorCount = 0;
@@ -138,94 +367,153 @@ export class ProgressService {
                     
                     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
                 };
-                const parseDate = (dateStr: string): string => {
+
+                // Agregar esta función DESPUÉS de formatDateForMySQL
+                const parseExcelDate = (value: any): string => {
+                    this.logger.log(`=== PARSEANDO FECHA EXCEL ===`);
+                    this.logger.log(`Valor recibido: ${value}`);
+                    this.logger.log(`Tipo: ${typeof value}`);
+                    this.logger.log(`Es Date?: ${value instanceof Date}`);
+                    
+                    if (!value) {
+                        this.logger.log(`Valor vacío, usando fecha actual`);
+                        return formatDateForMySQL(new Date());
+                    }
+
+                    try {
+                        // CASO 1: Ya es un objeto Date (Excel lo parseó correctamente)
+                        if (value instanceof Date) {
+                            this.logger.log(`Es objeto Date: ${value}`);
+                            return formatDateForMySQL(value);
+                        }
+
+                        // CASO 2: Es un número (fecha serial de Excel)
+                        if (typeof value === 'number') {
+                            this.logger.log(`Es número serial de Excel: ${value}`);
+                            
+                            // Fórmula: (serial - 25569) * milisegundos_por_día
+                            const millisecondsPerDay = 24 * 60 * 60 * 1000;
+                            const excelEpochOffset = 25569; // Diferencia entre época Excel y Unix
+                            
+                            const jsDate = new Date((value - excelEpochOffset) * millisecondsPerDay);
+                            
+                            this.logger.log(`Fecha convertida desde serial ${value}: ${jsDate}`);
+                            this.logger.log(`Día: ${jsDate.getDate()}, Mes: ${jsDate.getMonth() + 1}, Año: ${jsDate.getFullYear()}`);
+                            
+                            return formatDateForMySQL(jsDate);
+                        }
+
+                        // CASO 3: Es string - usar función de parsing mejorada
+                        if (typeof value === 'string') {
+                            this.logger.log(`Es string, parseando: ${value}`);
+                            return parseStringDate(value.toString());
+                        }
+
+                        // CASO 4: No se reconoce el tipo
+                        this.logger.log(`Tipo no reconocido, usando fecha actual`);
+                        return formatDateForMySQL(new Date());
+
+                    } catch (error) {
+                        this.logger.error(`Error parseando fecha Excel: ${error.message}`);
+                        return formatDateForMySQL(new Date());
+                    }
+                };
+
+                // Función auxiliar para parsear strings (versión mejorada de tu parseDate)
+                const parseStringDate = (dateStr: string): string => {
                     if (!dateStr || dateStr.trim() === '') {
                         return formatDateForMySQL(new Date());
                     }
-                
-                    // Limpieza inicial - eliminar comillas y espacios
+
                     dateStr = dateStr.trim().replace(/^'+|'+$/g, '');
-                    
-                    this.logger.log(`Parseando fecha: ${dateStr}`);
+                    this.logger.log(`Parseando string de fecha: ${dateStr}`);
                     
                     try {
-                        // Para cualquier formato con /
+                        // Intentar parsing directo con Date si parece ser ISO
+                        if (dateStr.includes('-') || dateStr.includes('T')) {
+                            const isoDate = new Date(dateStr);
+                            if (!isNaN(isoDate.getTime())) {
+                                this.logger.log(`Parseado como ISO: ${isoDate}`);
+                                return formatDateForMySQL(isoDate);
+                            }
+                        }
+
+                        // Formato con barras (tu lógica actual mejorada)
                         if (dateStr.includes('/')) {
                             const parts = dateStr.split('/');
                             
-                            // Verificar que tenemos exactamente 3 partes
                             if (parts.length !== 3) {
-                                this.logger.log(`Formato de fecha inválido: ${dateStr}, falta alguna parte`);
+                                this.logger.log(`Formato inválido: ${dateStr}`);
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            // Convertir a números 
                             const part1 = parseInt(parts[0].trim(), 10);
                             const part2 = parseInt(parts[1].trim(), 10);
                             let part3 = parseInt(parts[2].trim(), 10);
                             
-                            // Validación básica de los números
                             if (isNaN(part1) || isNaN(part2) || isNaN(part3)) {
-                                this.logger.log(`Partes de fecha no numéricas: ${dateStr}`);
+                                this.logger.log(`Partes no numéricas: ${dateStr}`);
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            // Determinar el formato de la fecha
                             let day: number, month: number, year: number;
                             
-                            // Si la primera parte es > 12, entonces probablemente es DD/MM/YYYY
-                            if (part1 > 12) {
-                                day = part1;
-                                month = part2;
+                            // Si part3 es claramente un año (> 31)
+                            if (part3 > 31) {
                                 year = part3;
-                                this.logger.log(`Detectado formato DD/MM/YYYY`);
-                            } 
-                            // Si la segunda parte es > 12, entonces probablemente es MM/DD/YYYY
-                            else if (part2 > 12) {
-                                month = part1;
-                                day = part2;
-                                year = part3;
-                                this.logger.log(`Detectado formato MM/DD/YYYY`);
-                            }
-                            // Para el caso específico de Colombia, asumimos DD/MM/YYYY
-                            else {
-                                // En Latinoamérica, el formato más común es DD/MM/YYYY
-                                day = part1;
-                                month = part2;
-                                year = part3;
-                                this.logger.log(`Formato ambiguo, asumiendo DD/MM/YYYY (formato colombiano)`);
+                                if (part1 > 12) {
+                                    day = part1;
+                                    month = part2;
+                                    this.logger.log(`DD/MM/YYYY: ${day}/${month}/${year}`);
+                                } else if (part2 > 12) {
+                                    month = part1;
+                                    day = part2;
+                                    this.logger.log(`MM/DD/YYYY: ${month}/${day}/${year}`);
+                                } else {
+                                    // Formato colombiano por defecto
+                                    day = part1;
+                                    month = part2;
+                                    this.logger.log(`DD/MM/YYYY (colombiano): ${day}/${month}/${year}`);
+                                }
+                            } else {
+                                // Año de 2 dígitos
+                                year = part3 < 50 ? 2000 + part3 : 1900 + part3;
+                                
+                                if (part1 > 12) {
+                                    day = part1;
+                                    month = part2;
+                                } else if (part2 > 12) {
+                                    month = part1;
+                                    day = part2;
+                                } else {
+                                    // Colombiano por defecto
+                                    day = part1;
+                                    month = part2;
+                                }
+                                this.logger.log(`Con año 2 dígitos: ${day}/${month}/${year}`);
                             }
                             
-                            // Validación de rangos
+                            // Validación
                             if (day < 1 || day > 31 || month < 1 || month > 12) {
-                                this.logger.log(`Valores de fecha fuera de rango: día=${day}, mes=${month}`);
+                                this.logger.error(`Fecha inválida: día=${day}, mes=${month}, año=${year}`);
                                 return formatDateForMySQL(new Date());
                             }
                             
-                            // Manejar años de 2 dígitos
-                            if (year < 100) {
-                                year = 2000 + year;
-                                this.logger.log(`Año de 2 dígitos convertido a ${year}`);
-                            }
-                            
-                            // Formato directo para MySQL sin usar el objeto Date
-                            const formattedYear = String(year).padStart(4, '0');
-                            const formattedMonth = String(month).padStart(2, '0');
-                            const formattedDay = String(day).padStart(2, '0');
-                            
-                            const formattedDate = `${formattedYear}-${formattedMonth}-${formattedDay} 00:00:00`;
-                            this.logger.log(`Fecha formateada: ${formattedDate}`);
+                            const formattedDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} 00:00:00`;
+                            this.logger.log(`Fecha final: ${formattedDate}`);
                             return formattedDate;
                         }
                         
-                        // Si llegamos aquí, el formato no es el esperado
-                        this.logger.log(`Formato de fecha no reconocido: ${dateStr}`);
+                        this.logger.log(`Formato no reconocido: ${dateStr}`);
                         return formatDateForMySQL(new Date());
+                        
                     } catch (error) {
-                        this.logger.error(`Error al parsear fecha ${dateStr}: ${error.message}`);
+                        this.logger.error(`Error parseando string fecha: ${error.message}`);
                         return formatDateForMySQL(new Date());
                     }
                 };
+
+                
 
                 // Reiniciar variables para cada fila
                 let firstProgressDate = formatDateForMySQL(new Date());
@@ -236,6 +524,9 @@ export class ProgressService {
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
     
                 try {
+
+                    this.logger.warn(`${identification}, ${email}, ${userClientId}`);
+
                         // Buscar usuario por identificación o correo
                         const whereConditions: any[] = [];
                         
@@ -264,6 +555,11 @@ export class ProgressService {
                             this.logger.warn(`Usuario no encontrado: ${identification || ''} / ${email || ''}`);
                             return; // Usar return en lugar de continue para salir de la transacción actual
                         }
+                        
+                        if (user.identification !== identification) {
+                            this.logger.warn(`Identificación del usuario no coincide: ${user.identification} != ${identification}`);
+                            return;
+                        }
     
                         // Procesar cada curso en la fila
                         for (const courseColumn of courseColumns) {
@@ -272,6 +568,13 @@ export class ProgressService {
                             let courseValue: string = '';
                             let calificacionValue: string = '';
                             let fechaValidacion: string = formatDateForMySQL(new Date());
+
+                            const fechaRaw = row[courseColumn.fechaValidacionIndex];
+                
+                            this.logger.log(`=== PROCESANDO FECHA ===`);
+                            this.logger.log(`Fecha raw: ${JSON.stringify(fechaRaw)}`);
+                            this.logger.log(`Formato detectado: ${detectedFormat}`);
+
 
                             // Mostrar información de debugging
                             this.logger.log(`Procesando curso: ${courseColumn.name}`);
@@ -313,9 +616,17 @@ export class ProgressService {
 
 
                             this.logger.log(`Fecha antes de parseo ${row[courseColumn.fechaValidacionIndex]}`);
+
+                            this.logger.log(`=== DEBUGGING COLUMNA FECHA ===`);
+                            this.logger.log(`Valor raw: ${JSON.stringify(row[courseColumn.fechaValidacionIndex])}`);
+                            this.logger.log(`Índice columna: ${courseColumn.fechaValidacionIndex}`);
+                            this.logger.log(`Headers en esa posición: ${headers[courseColumn.fechaValidacionIndex]}`);
+                            this.logger.log(`===============================`);
+
                             // Obtener fecha de validación si está disponible
+                            // DESPUÉS:
                             fechaValidacion = row[courseColumn.fechaValidacionIndex] ? 
-                                parseDate(row[courseColumn.fechaValidacionIndex].toString().trim()) : 
+                                parseExcelDate(row[courseColumn.fechaValidacionIndex]) : 
                                 formatDateForMySQL(new Date());
                             this.logger.log(`Fechas ${fechaValidacion}`);
 
@@ -417,6 +728,8 @@ export class ProgressService {
                                     this.logger.log(`Usuario ID ${user.id} agregado exitosamente al club ID ${currentClubId}`);
                                 } else {
                                     this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}`);
+                                    usersAlreadyInClub++;
+                                    // continue; // Saltar al siguiente curso
                                 }
                             }
 
@@ -451,7 +764,7 @@ export class ProgressService {
                                     existingProgress.created_at = firstProgressDate;
                                     existingProgress.updated_at = lastProgressDate;
                                     await this.generalProgressVideoroomsRepository.save(existingProgress);
-                                    this.logger.log(`Se actualiza videoroom: ${existingProgress.id_videoroom}`);
+                                    this.logger.log(`general progress Se actualiza videoroom: ${existingProgress.id_videoroom}`);
                                 } else {
                                     // Crear un nuevo registro
                                     await this.generalProgressVideoroomsRepository.save({
@@ -638,7 +951,7 @@ export class ProgressService {
                                             WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
                                         `, [nota, firstProgressDate, lastProgressDate, user.id, videoRoom.id, poll.id_polls]);
                                         
-                                        this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
+                                        this.logger.log(`Actualizado progreso de encuesta para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
                                     } else {
                                         // Insertar nuevo registro
                                         await manager.query(`
@@ -646,7 +959,7 @@ export class ProgressService {
                                             VALUES (?, ?, ?, ?, ?, ?)
                                         `, [user.id, videoRoom.id, poll.id_polls, nota, firstProgressDate, lastProgressDate]);
                                         
-                                        this.logger.log(`Creado nuevo progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
+                                        this.logger.log(`Creado nuevo progreso de encuesta para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
                                     }
                                     
                                     const [evaluation] = await manager.query(`
@@ -677,7 +990,7 @@ export class ProgressService {
                                                     WHERE user_id = ? AND evaluation_id = ?
                                                 `, [nota, firstProgressDate, lastProgressDate, user.id, poll.id_polls]);
                                                 
-                                                this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
+                                                this.logger.log(`Actualizado evaluation_users encuesta para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
                                             } else {
                                                 // Insertar nuevo registro
                                                 await manager.query(`
@@ -685,7 +998,7 @@ export class ProgressService {
                                                     VALUES (?, ?, ?, 1, 1, ?, ?)
                                                 `, [user.id, poll.id_polls, nota, firstProgressDate, lastProgressDate]);
                                                 
-                                                this.logger.log(`Creado nuevo evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
+                                                this.logger.log(`Creado nuevo evaluation_users encuesta para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
                                             }
                                             
                                             // Verificar si ya existe un registro en el historial con los mismos valores
@@ -702,9 +1015,9 @@ export class ProgressService {
                                                     VALUES (?, ?, ?, 1, ?, ?)
                                                 `, [poll.id_polls, user.id, nota, firstProgressDate, lastProgressDate]);
                                                 
-                                                this.logger.log(`Creado registro en evaluation_history para evaluation_id=${poll.id_polls}, user_id=${user.id}`);
+                                                this.logger.log(`Creado registro en evaluation_history para encuesta evaluation_id=${poll.id_polls}, user_id=${user.id}`);
                                             } else {
-                                                this.logger.log(`Registro similar ya existe en evaluation_history para evaluation_id=${poll.id_polls}, user_id=${user.id}`);
+                                                this.logger.log(`Registro similar ya existe en evaluation_history para encuesta evaluation_id=${poll.id_polls}, user_id=${user.id}`);
                                             }
                                             
                                             // Procesar respuestas a preguntas
@@ -762,11 +1075,14 @@ export class ProgressService {
                                     }
                                 }
 
-        
+                                this.logger.log(`Se buscan evaluaciones`);
                                 // Obtener detalles de evaluación
                                 const evaluationDetails = await manager.query(`
                                     SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
                                 `, [videoRoom.id]);
+
+                                // evaluaciones encontradas
+                                this.logger.log(`Evaluaciones encontradas: ${evaluationDetails.length} para videoroom_id=${videoRoom.id}`);
 
                                 // Procesar cada evaluación
                                 for (const evalDetail of evaluationDetails) {
@@ -953,6 +1269,7 @@ export class ProgressService {
                 countCoursesNotFound: countCoursesNotFound,
                 coursesNotFound: coursesNotFound,
                 usersNotFound: usersNotFoundCount,
+                usersAlreadyInClub: usersAlreadyInClub,
                 usersAddedToClub
             });
 
@@ -1212,9 +1529,11 @@ export class ProgressService {
                             this.logger.log(`Calificación: ${calificacionValue}`);
                             
                             // NUEVA LÓGICA: Verificar si está APROBADO y tiene calificación
+                            // const isApproved = courseValue.toUpperCase() === 'APROBADO' || 
+                            //                 courseValue.toUpperCase().includes('APROB') || courseValue.toUpperCase() === 'PENDIENTE' || 
+                            //                 courseValue.toUpperCase().includes('PENDI');
                             const isApproved = courseValue.toUpperCase() === 'APROBADO' || 
-                                            courseValue.toUpperCase().includes('APROB') || courseValue.toUpperCase() === 'PENDIENTE' || 
-                                            courseValue.toUpperCase().includes('PENDI');
+                                            courseValue.toUpperCase().includes('APROB');
                             const hasCalificacion = !!calificacionValue;
 
                             // Si no está aprobado o no tiene calificación, saltar este curso
@@ -1319,14 +1638,15 @@ export class ProgressService {
                                 
                                 // Si el usuario no está registrado en el club, agregarlo
                                 if (existingClubUser) {
-                                    const fechaLimite = new Date('2025-03-25');
-                                    const fechaRegistro = existingClubUser.created_at ? new Date(existingClubUser.created_at) : new Date();
-                                    
-                                    this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}. Fecha registro: ${fechaRegistro}`);
-                                    
-                                    // Si el registro es posterior a la fecha límite, saltamos este curso
-                                    if (fechaRegistro > fechaLimite) {
-                                        this.logger.log(`Saltando curso ${courseName} para usuario ID ${user.id} porque se registró después del 25/03/2025`);
+                                    const fechaInicio = new Date('2025-03-25');
+                                    const fechaFin = new Date('2025-05-20');
+                                    const fechaRegistro = existingClubUser.created_at ? new Date(existingClubUser.created_at) : null;
+
+                                    this.logger.log(`Usuario ID ${user.id} ya está registrado en el club ID ${currentClubId}. Fecha registro: ${fechaRegistro || 'NULL'}`);
+
+                                    // Saltar si la fecha existe y está fuera del rango permitido
+                                    if (fechaRegistro && (fechaRegistro < fechaInicio || fechaRegistro > fechaFin)) {
+                                        this.logger.log(`⛔ Saltando curso ${courseName} para usuario ID ${user.id} porque se registró fuera del rango permitido.`);
                                         usersAlreadyInClub++;
                                         continue;
                                     }
@@ -1464,8 +1784,10 @@ export class ProgressService {
                                 
                                 // this.logger.log(`Encuestas: ${JSON.stringify(pollsDetails)}`);
                                 
+                                this.logger.log(`Actualizado fechas de encuesta`);
                                 for (const poll of pollsDetails) {
                                     const nota = notaCalificacion;
+
                                     
                                     // Verificar si ya existe el registro de progreso
                                     const [existingProgress] = await manager.query(`
@@ -1481,7 +1803,7 @@ export class ProgressService {
                                             WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
                                         `, [firstProgressDate, lastProgressDate, user.id, videoRoom.id, poll.id_polls]);
                                         
-                                        this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
+                                        // this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${poll.id_polls}`);
                                     }
                                     
                                     const [evaluation] = await manager.query(`
@@ -1512,7 +1834,7 @@ export class ProgressService {
                                                     WHERE user_id = ? AND evaluation_id = ?
                                                 `, [firstProgressDate, lastProgressDate, user.id, poll.id_polls]);
                                                 
-                                                this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
+                                                // this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${poll.id_polls}`);
                                             }
                                             
                                             // Procesar respuestas a preguntas
@@ -1536,7 +1858,7 @@ export class ProgressService {
                                                         WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
                                                     `, [firstProgressDate, lastProgressDate, poll.id_polls, question.id, user.id]);
                                                     
-                                                    this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}, nueva fecha_creacion=${firstProgressDate}, nueva fecha_actualizacion=${lastProgressDate}`);
+                                                    // this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}, nueva fecha_creacion=${firstProgressDate}, nueva fecha_actualizacion=${lastProgressDate}`);
                                                 }
                                             }
                                         } else {
@@ -1570,7 +1892,7 @@ export class ProgressService {
                                             WHERE id_user = ? AND id_videoroom = ? AND id_evaluation = ?
                                         `, [firstProgressDate, lastProgressDate, user.id, videoRoom.id, evalDetail.id_evaluation]);
                                         
-                                        this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${evalDetail.id_evaluation}`);
+                                        // this.logger.log(`Actualizado progreso de evaluación para user_id=${user.id}, videoroom_id=${videoRoom.id}, evaluation_id=${evalDetail.id_evaluation}`);
                                     }
 
                                     // Obtener evaluación para verificar configuraciones
@@ -1602,7 +1924,7 @@ export class ProgressService {
                                                     WHERE user_id = ? AND evaluation_id = ?
                                                 `, [firstProgressDate, lastProgressDate, user.id, evalDetail.id_evaluation]);
                                                 
-                                                this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${evalDetail.id_evaluation}`);
+                                                // this.logger.log(`Actualizado evaluation_users para user_id=${user.id}, evaluation_id=${evalDetail.id_evaluation}`);
                                             }
                                             
                                             // Verificar si ya existe un registro en el historial con los mismos valores
@@ -1621,7 +1943,7 @@ export class ProgressService {
                                                     WHERE evaluation_id = ? AND user_id = ?
                                                 `, [firstProgressDate, lastProgressDate, evalDetail.id_evaluation, user.id]);
                                                 
-                                                this.logger.log(`Actualizada fecha en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
+                                                // this.logger.log(`Actualizada fecha en evaluation_history para evaluation_id=${evalDetail.id_evaluation}, user_id=${user.id}`);
                                             }
                                         
                                             // Obtener preguntas de la evaluación
@@ -1646,7 +1968,7 @@ export class ProgressService {
                                                         WHERE evaluation_id = ? AND question_id = ? AND user_id = ?
                                                     `, [firstProgressDate, lastProgressDate, evalDetail.id_evaluation, question.id, user.id]);
                                                     
-                                                    this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}`);
+                                                    // this.logger.log(`Actualizada fecha para respuesta existente: question_id=${question.id}, user_id=${user.id}`);
                                                 }
                                             }
                                         } else {
@@ -1832,11 +2154,17 @@ export class ProgressService {
                 const identification = row[indexMap['CEDULA']?.toString().trim() || indexMap['NUMERO DE IDENTIFICACION']]?.toString().trim();
                 const email = row[indexMap['CORREO']]?.toString().toLowerCase().trim();
                 const userClientId = clientId || parseInt(row[indexMap['Client']], 10);
+
+                // Reiniciar variables para cada curso
+                let courseValue: string = '';
+                let calificacionValue: string = '';
     
                 try {
                     await this.dataSource.transaction(async (manager) => {
                         // Buscar usuario por identificación o correo
                         const whereConditions: any[] = [];
+
+                        this.logger.warn(`Usuario: ${identification || ''} / ${email || ''}`);
                         
                         if (identification) {
                             whereConditions.push({ identification: identification, client_id: userClientId });
@@ -1880,7 +2208,7 @@ export class ProgressService {
                             this.logger.log(`Procesando curso: ${courseColumn.name}`);
                             
                             // Obtener el valor del curso (APROBADO/PENDIENTE/NO APLICA)
-                            const courseValue = row[courseColumn.index]?.toString().trim();
+                            courseValue = row[courseColumn.index]?.toString().trim();
                             
                             this.logger.log(`Valor del curso: ${courseValue}`);
                             
@@ -1895,6 +2223,7 @@ export class ProgressService {
                             
                             // Buscar videoroom por nombre del curso
                             let currentClubId: number | null = null;
+                            let videoRooms: VideoRoom[] = [];
                             
                             if (clubId) {
                                 // Si se proporciona clubId
@@ -1910,6 +2239,10 @@ export class ProgressService {
                                 // Si hay coincidencia exacta
                                 if (clubTranslation) {
                                     currentClubId = clubTranslation.club_id;
+                                    videoRooms = await manager.getRepository(VideoRoom).find({
+                                        where: { club_id: clubTranslation.club_id },
+                                        relations: ['club']
+                                    });
                                 } else {
                                     // Usar LIKE para buscar coincidencias parciales
                                     const partialMatches = await manager.query(`
@@ -1920,7 +2253,17 @@ export class ProgressService {
                                     
                                     if (partialMatches && partialMatches.length > 0) {
                                         currentClubId = partialMatches[0].club_id;
+                                        videoRooms = await manager.getRepository(VideoRoom).find({
+                                            where: { club_id: partialMatches[0].club_id },
+                                            relations: ['club']
+                                        });
                                     }
+                                }
+
+                                if (!videoRooms || videoRooms.length === 0) {
+                                    // Registrar que no se encontró el curso y continuar con el siguiente
+                                    this.logger.warn(`No se encontró ningún VideoRoom para el curso: ${courseName}`);
+                                    continue;
                                 }
                             }
     
@@ -1981,7 +2324,150 @@ export class ProgressService {
                                     status: 'success',
                                     message: `Usuario agregado al curso (${valueUpperCase})`
                                 });
-                                
+
+                                // if(valueUpperCase === 'PENDIENTE' || valueUpperCase.includes('PEND')){
+                                //     for (const videoRoom of videoRooms){
+                                //         this.logger.warn(`Se busca progreso para ${videoRoom.id} del usuario ${user.id}`);
+
+                                //         // Verificar si ya existe progreso general para este videoroom
+                                //         const existingProgress = await this.generalProgressVideoroomsRepository.findOne({
+                                //             where: { id_user: user.id, id_videoroom: videoRoom.id },
+                                //         });
+
+                                //         if(existingProgress){
+                                //             // Eliminar el progreso existente
+                                //             await this.generalProgressVideoroomsRepository.remove(existingProgress);
+                                //             this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                //         }
+
+                                //         const videoRoomContents = await manager.query(`
+                                //             SELECT content_id FROM videoroom_content WHERE videoroom_id = ?
+                                //         `, [videoRoom.id]);
+                
+                                //         // Actualizar progreso para cada contenido
+                                //         for (const content of videoRoomContents){
+                                //             const existingProgressVideoroom = await this.userProgressVideoroomRepository.findOne({
+                                //                 where: { id_content: content.content_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressVideoroom) {
+                                //                 await this.userProgressVideoroomRepository.remove(existingProgressVideoroom);
+                                //             }
+                                //         }
+
+                                //         // Obtener detalles de las tareas asociadas al videoroom
+                                //         const taskDetails = await manager.query(`
+                                //             SELECT tasks_id FROM detail_tasks_videorooms WHERE videorooms_id = ?
+                                //         `, [videoRoom.id]);
+                
+                                //         // Actualizar progreso para cada tarea
+                                //         for (const task of taskDetails){
+                                //             const existingProgressTaskVideoroom = await this.userProgressTaskVideoroomRepository.findOne({
+                                //                 where: { id_task: task.tasks_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressTaskVideoroom) {
+                                //                 await this.userProgressTaskVideoroomRepository.remove(existingProgressTaskVideoroom);
+                                //             }
+                                //         }
+
+                                //         const wallsDetails = await this.detailWallsVideoRoomRepository.find({
+                                //             where: { videorooms_id: videoRoom.id },
+                                //         });
+                                        
+                                //         for (const wall of wallsDetails){
+                                //             const existingProgressWallVideoroom = await this.userProgressForumVideoRoomRepository.findOne({
+                                //                 where: { id_advertisements: wall.advertisements_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressWallVideoroom) {
+                                //                 await this.userProgressForumVideoRoomRepository.remove(existingProgressWallVideoroom);
+                                //             }
+                                //         }
+
+                                //         const activityDetails = await this.detailActivitiesVideoRoomRepository.find({
+                                //             where: { id_videoroom: videoRoom.id },
+                                //         });
+                
+                                //         for (const activity of activityDetails){
+                                //             const existingProgressActivitesVideoroom = await this.userProgressActivityVideoRoomRepository.findOne({
+                                //                 where: { id_activity: activity.id_activities, id_user: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressActivitesVideoroom) {
+                                //                 await this.userProgressActivityVideoRoomRepository.remove(existingProgressActivitesVideoroom);
+                                //             }
+                                //         }
+
+                                //         const selftEvaluationDetails = await this.detailSelftEvaluationVideoRoomRepository.find({
+                                //             where: { id_videoroom: videoRoom.id },
+                                //         });
+                                        
+                                //         for (const selftEvaluation of selftEvaluationDetails){
+                                //             const existingProgressSelftEvaluationVideoroom = await this.userProgressSelftEvaluationVideoRoomRepository.findOne({
+                                //                 where: { selft_evaluations_id: selftEvaluation.selft_evaluations_id, user_id: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressSelftEvaluationVideoroom) {
+                                //                 await this.userProgressSelftEvaluationVideoRoomRepository.remove(existingProgressSelftEvaluationVideoroom);
+                                //             }
+                                //         }
+
+                                //         const pollsDetails = await this.videoRoomRepository.find({
+                                //             where: { id: videoRoom.id, id_polls: Not(IsNull()) }
+                                //         });
+
+                                //         for (const poll of pollsDetails) {
+                                //             const existingProgressPollVideoroom = await this.userProgressEvaluationVideoRoomRepository.findOne({
+                                //                 where: { id_evaluation: poll.id_polls, id_user: user.id, id_videoroom: videoRoom.id },
+                                //             });
+                                //             if (existingProgressPollVideoroom) {
+                                //                 await this.userProgressEvaluationVideoRoomRepository.remove(existingProgressPollVideoroom);
+                                //             }
+                                //         }
+
+                                //         const evaluationsDetails = await manager.query(`
+                                //             SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
+                                //         `, [videoRoom.id]);
+
+                                //         for (const evaluation of evaluationsDetails){
+                                //             const existingProgressEvaluationVideoroom = await this.userProgressEvaluationVideoRoomRepository.findOne({
+                                //                 where: { id_evaluation: evaluation.id_evaluations, id_user: user.id, id_videoroom: videoRoom.id},
+                                //             });
+                
+                                //             if (existingProgressEvaluationVideoroom) {
+                                //                 await this.userProgressEvaluationVideoRoomRepository.remove(existingProgressEvaluationVideoroom);
+
+                                //                 const [existingEvalUser] = await manager.query(`
+                                //                     SELECT id FROM evaluation_users 
+                                //                     WHERE user_id = ? AND evaluation_id = ?
+                                //                 `, [user.id, evaluation.id_evaluation]);
+
+                                //                 if (existingEvalUser) {
+                                //                     // Eliminar el registro de evaluación del usuario
+                                //                     await manager.query(`
+                                //                         DELETE FROM evaluation_users 
+                                //                         WHERE user_id = ? AND evaluation_id = ?
+                                //                     `, [user.id, evaluation.id_evaluation]);
+                                //                 }
+
+                                //                 const [existingHistory] = await manager.query(`
+                                //                     SELECT id FROM evaluation_history 
+                                //                     WHERE evaluation_id = ? AND user_id = ? 
+                                //                     LIMIT 1
+                                //                 `, [evaluation.id_evaluation, user.id]);
+
+                                //                 if (existingHistory) {
+                                //                     // Eliminar el registro de historial de evaluación
+                                //                     await manager.query(`
+                                //                         DELETE FROM evaluation_history 
+                                //                         WHERE evaluation_id = ? AND user_id = ?
+                                //                     `, [evaluation.id_evaluation, user.id]);
+                                //                 }
+                                //             }
+                                //         }
+                                //     }
+                                // }
                                 successCount++;
                             } 
                             // Si no debe estar en el curso (NO APLICA) pero está registrado
@@ -2018,6 +2504,244 @@ export class ProgressService {
                                     status: 'success',
                                     message: `Usuario ya registrado en el curso (${valueUpperCase})`
                                 });
+
+                                if(valueUpperCase === 'PENDIENTE' || valueUpperCase.includes('PEND')){
+                                    for (const videoRoom of videoRooms){
+                                        this.logger.warn(`Se busca progreso para ${videoRoom.id} del usuario ${user.id}`);
+
+                                        // Verificar si ya existe progreso general para este videoroom
+                                        const existingProgress = await this.generalProgressVideoroomsRepository.findOne({
+                                            where: { id_user: user.id, id_videoroom: videoRoom.id },
+                                        });
+
+                                        if(existingProgress){
+                                            // Eliminar el progreso existente
+                                            if(existingProgress){
+                                                // Validar la fecha de creación del registro
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgress.created_at);
+                                                
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.generalProgressVideoroomsRepository.remove(existingProgress);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        const videoRoomContents = await manager.query(`
+                                            SELECT content_id FROM videoroom_content WHERE videoroom_id = ?
+                                        `, [videoRoom.id]);
+                
+                                        // Actualizar progreso para cada contenido
+                                        for (const content of videoRoomContents){
+                                            const existingProgressVideoroom = await this.userProgressVideoroomRepository.findOne({
+                                                where: { id_content: content.content_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressVideoroomRepository.remove(existingProgressVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        // Obtener detalles de las tareas asociadas al videoroom
+                                        const taskDetails = await manager.query(`
+                                            SELECT tasks_id FROM detail_tasks_videorooms WHERE videorooms_id = ?
+                                        `, [videoRoom.id]);
+                
+                                        // Actualizar progreso para cada tarea
+                                        for (const task of taskDetails){
+                                            const existingProgressTaskVideoroom = await this.userProgressTaskVideoroomRepository.findOne({
+                                                where: { id_task: task.tasks_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressTaskVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressTaskVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressTaskVideoroomRepository.remove(existingProgressTaskVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        const wallsDetails = await this.detailWallsVideoRoomRepository.find({
+                                            where: { videorooms_id: videoRoom.id },
+                                        });
+                                        
+                                        for (const wall of wallsDetails){
+                                            const existingProgressWallVideoroom = await this.userProgressForumVideoRoomRepository.findOne({
+                                                where: { id_advertisements: wall.advertisements_id, id_user: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressWallVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressWallVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressForumVideoRoomRepository.remove(existingProgressWallVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+
+                                            }
+                                        }
+
+                                        const activityDetails = await this.detailActivitiesVideoRoomRepository.find({
+                                            where: { id_videoroom: videoRoom.id },
+                                        });
+                
+                                        for (const activity of activityDetails){
+                                            const existingProgressActivitesVideoroom = await this.userProgressActivityVideoRoomRepository.findOne({
+                                                where: { id_activity: activity.id_activities, id_user: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressActivitesVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressActivitesVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressActivityVideoRoomRepository.remove(existingProgressActivitesVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        const selftEvaluationDetails = await this.detailSelftEvaluationVideoRoomRepository.find({
+                                            where: { id_videoroom: videoRoom.id },
+                                        });
+                                        
+                                        for (const selftEvaluation of selftEvaluationDetails){
+                                            const existingProgressSelftEvaluationVideoroom = await this.userProgressSelftEvaluationVideoRoomRepository.findOne({
+                                                where: { selft_evaluations_id: selftEvaluation.selft_evaluations_id, user_id: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressSelftEvaluationVideoroom) {
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressSelftEvaluationVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressSelftEvaluationVideoRoomRepository.remove(existingProgressSelftEvaluationVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        const pollsDetails = await this.videoRoomRepository.find({
+                                            where: { id: videoRoom.id, id_polls: Not(IsNull()) }
+                                        });
+
+                                        for (const poll of pollsDetails) {
+                                            const existingProgressPollVideoroom = await this.userProgressEvaluationVideoRoomRepository.findOne({
+                                                where: { id_evaluation: poll.id_polls, id_user: user.id, id_videoroom: videoRoom.id },
+                                            });
+                                            if (existingProgressPollVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressPollVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressEvaluationVideoRoomRepository.remove(existingProgressPollVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para ${videoRoom.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+                                            }
+                                        }
+
+                                        const evaluationsDetails = await manager.query(`
+                                            SELECT id_evaluation FROM detail_evaluation_video_rooms WHERE id_videoroom = ?
+                                        `, [videoRoom.id]);
+
+                                        for (const evaluation of evaluationsDetails){
+                                            const existingProgressEvaluationVideoroom = await this.userProgressEvaluationVideoRoomRepository.findOne({
+                                                where: { id_evaluation: evaluation.id_evaluations, id_user: user.id, id_videoroom: videoRoom.id},
+                                            });
+                
+                                            if (existingProgressEvaluationVideoroom) {
+
+                                                const cutoffDate = new Date('2025-05-26');
+                                                const createdAt = new Date(existingProgressEvaluationVideoroom.created_at);
+
+                                                if(createdAt > cutoffDate){
+                                                    // Eliminar el progreso existente solo si fue creado antes o el 26 de mayo de 2025
+                                                    await this.userProgressEvaluationVideoRoomRepository.remove(existingProgressEvaluationVideoroom);
+                                                    this.logger.warn(`Progreso eliminado para evaluacion ${videoRoom.id} del usuario ${user.id}`);
+                                                } else {
+                                                    this.logger.warn(`Progreso NO eliminado para evaluacion ${evaluation.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                }
+
+                                                const [existingEvalUser] = await manager.query(`
+                                                    SELECT id FROM evaluation_users 
+                                                    WHERE user_id = ? AND evaluation_id = ?
+                                                `, [user.id, evaluation.id_evaluation]);
+
+                                                if (existingEvalUser) {
+
+                                                    if(createdAt > cutoffDate){
+                                                        // Eliminar el registro de evaluación del usuario
+                                                        await manager.query(`
+                                                            DELETE FROM evaluation_users 
+                                                            WHERE user_id = ? AND evaluation_id = ?
+                                                        `, [user.id, evaluation.id_evaluation]);
+                                                        this.logger.warn(`Progreso eliminado para evaluacion ${videoRoom.id} del usuario ${user.id}`);
+                                                    } else {
+                                                        this.logger.warn(`Progreso NO eliminado para evaluacion ${evaluation.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                    }
+                                                }
+
+                                                const [existingHistory] = await manager.query(`
+                                                    SELECT id FROM evaluation_history 
+                                                    WHERE evaluation_id = ? AND user_id = ? 
+                                                    LIMIT 1
+                                                `, [evaluation.id_evaluation, user.id]);
+
+                                                if (existingHistory) {
+
+                                                    if(createdAt > cutoffDate){
+                                                        // Eliminar el registro de historial de evaluación
+                                                        await manager.query(`
+                                                            DELETE FROM evaluation_history 
+                                                            WHERE evaluation_id = ? AND user_id = ?
+                                                        `, [evaluation.id_evaluation, user.id]);
+                                                        this.logger.warn(`Progreso eliminado para evaluacion ${videoRoom.id} del usuario ${user.id}`);
+                                                    } else {
+                                                        this.logger.warn(`Progreso NO eliminado para evaluacion ${evaluation.id} del usuario ${user.id} - creado después del 26/05/2025`);
+                                                    }
+                                                    
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 
                                 successCount++;
                             }
@@ -2098,16 +2822,29 @@ export class ProgressService {
                 ]);
             });
             
-            const detailsSheet = XLSX.utils.aoa_to_sheet(detailsData);
-            XLSX.utils.book_append_sheet(reportWorkbook, detailsSheet, 'Detalles');
+            // const detailsSheet = XLSX.utils.aoa_to_sheet(detailsData);
+            // XLSX.utils.book_append_sheet(reportWorkbook, detailsSheet, 'Detalles');
             
-            // Guardar el archivo de reporte
-            const reportFilePath = `${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`;
-            this.logger.warn(`Archivo generado en: ${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`)
-            XLSX.writeFile(reportWorkbook, reportFilePath);
+            // // Guardar el archivo de reporte
+            // const reportFilePath = `${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`;
+            // this.logger.warn(`Archivo generado en: ${filePath.split('.').slice(0, -1).join('.')}_reporte_club_user.xlsx`)
+            // XLSX.writeFile(reportWorkbook, reportFilePath);
     
             // Eliminar archivo original después de procesar
             await unlink(filePath);
+
+            this.logger.warn({
+                message: 'Proceso completado',
+                total: rows.length,
+                success: successCount,
+                errors: errorCount,
+                errorDetails: errors,
+                countCoursesNotFound: countCoursesNotFound,
+                coursesNotFound: coursesNotFound,
+                usersNotFound: usersNotFound,
+                usersAddedToClub,
+                usersRemovedFromClub
+            })
     
             return {
                 message: 'Proceso completado',
@@ -2120,7 +2857,7 @@ export class ProgressService {
                 usersNotFound: usersNotFound,
                 usersAddedToClub,
                 usersRemovedFromClub,
-                reportFilePath
+                // reportFilePath
             };
         } catch (error) {
             this.logger.error(`Error procesando archivo: ${error.message}`);

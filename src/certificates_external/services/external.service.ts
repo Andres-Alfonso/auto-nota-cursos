@@ -108,6 +108,14 @@ export class ExternalService {
     private configService: ConfigService,
   ) {}
 
+  private normalizeText(text: string): string {
+    if (!text) return '';
+    return text
+      .normalize('NFD')                    // Descompone tildes
+      .replace(/[\u0300-\u036f]/g, '')    // Quita tildes y acentos
+      .toLowerCase()                       // Minúsculas
+      .trim();                            // Quita espacios
+  }
 
   async findCertificateExternals(clientId: number): Promise<void> {
     try {
@@ -398,13 +406,19 @@ export class ExternalService {
    * Busca documentos con el mismo nombre en la tabla documents
    */
   private async findDocumentsWithSameName(name: string): Promise<any[]> {
+    // Obtener todos los documentos
     const query = `
       SELECT id, name, client_id, type_document_category
       FROM documents
-      WHERE name = ?
     `;
     
-    return await this.connection.query(query, [name]);
+    const allDocuments = await this.connection.query(query);
+    const normalizedSearchName = this.normalizeText(name);
+    
+    // Filtrar en JavaScript comparando versiones normalizadas
+    return allDocuments.filter(doc => 
+      this.normalizeText(doc.name) === normalizedSearchName
+    );
   }
   
   /**

@@ -12,6 +12,7 @@ import {
   UploadedFile,
   Query
 } from '@nestjs/common';
+import { In } from 'typeorm';
 import { Response } from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -30,6 +31,8 @@ import { DocumentRequirement } from './models/document-requirement.entity';
 import { Repository } from 'typeorm/repository/Repository';
 import { User } from './models/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
+import { CustomField } from './entities/custom-field.entity';
+import { UserCustomField } from './entities/user-custom-field.entity';
 
 
 // Definir el lugar donde se guardarán los archivos
@@ -53,6 +56,26 @@ const storageConfig = diskStorage({
   }
 });
 
+interface UserWithCertificatesData {
+  user_id: number;
+  user_name: string;
+  user_last_name: string;
+  user_email: string;
+  user_identification: string;
+  user_status: string;
+  custom_fields: Map<string, string>;
+  certificates: Map<string, {
+    relation: string;
+    total_files: number;
+    active_files: number;
+    expiring_files: number;
+    expired_files: number;
+    last_upload_date: string;
+    last_expiry_date: string;
+    aditional_info?: string;
+  }>;
+}
+
 @Controller('api/external')
 export class ExternalController {
   private readonly logger = new Logger(ExternalController.name);
@@ -69,38 +92,65 @@ export class ExternalController {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     @InjectRepository(DocumentRequirement)
-    private documentRequirementRepository: Repository<DocumentRequirement>
+    private documentRequirementRepository: Repository<DocumentRequirement>,
+    @InjectRepository(CustomField)
+    private customFieldRepository: Repository<CustomField>,
+    @InjectRepository(UserCustomField)
+    private userCustomFieldRepository: Repository<UserCustomField>,
   ) {}
 
   @Post('process-certificates')
-  async processCertificates(@Body() dto: ProcessCertificatesDto): Promise<any> {
+  async processCertificates(@Body() body: any): Promise<any> {
     try {
-      this.logger.log(`Procesando certificados para el cliente ${dto.clientId}`);
+      this.logger.log(`Procesando certificados para el cliente ${body.clientId}`);
+      
+      // Validación básica para los campos requeridos
+      if (!body.clientId || !body.startDate || !body.endDate) {
+        throw new HttpException(
+          'Los campos clientId, startDate y endDate son obligatorios',
+          HttpStatus.BAD_REQUEST
+        );
+      }
       
       // Obtener certificados procesados
       const processedCertificates = await this.getCertificates(
-        dto.clientId,
-        dto.startDate,
-        dto.endDate,
-        dto.searchUser,
-        dto.searchEmail,
-        dto.searchIdentification,
-        dto.searchCertificate,
-        dto.selectedCertificate
+        body.clientId,
+        body.startDate,
+        body.endDate,
+        body.searchUser || '',
+        body.searchEmail || '',
+        body.searchIdentification || '',
+        body.searchCertificate || '',
+        body.selectedCertificate || ''
       );
+
+      // Obtener datos de usuarios con relación
+      const usersRelationData = await this.getUsersRelationData(
+        body.clientId,
+        body.startDate,
+        body.endDate,
+        body.searchUser || '',
+        body.searchEmail || '',
+        body.searchIdentification || '',
+        body.searchCertificate || '',
+        body.selectedCertificate || ''
+      );
+
+      // this.logger.warn(processedCertificates.groupedCertificates);
       
       // Generar el CSV
       const filePath = await this.generateCSV(
         processedCertificates.groupedCertificates,
-        dto.startDate,
-        dto.endDate,
-        dto.filename
+        usersRelationData,
+        body.startDate,
+        body.endDate,
+        body.filename || `certificados_externos_${body.startDate}_${body.endDate}.csv`
       );
       
       // Crear URL de descarga
       const baseUrl = this.configService.get<string>('https://homologation-notes.kalmsystem.com');
       const fileName = path.basename(filePath);
-      const downloadUrl = `${baseUrl}/api/v1/api/external/download-certificate/${fileName}`;
+      const downloadUrl = `https://homologation-notes.kalmsystem.com/api/v1/api/external/download-certificate/${fileName}`;
       
       return {
         statusCode: HttpStatus.OK,
@@ -124,7 +174,7 @@ export class ExternalController {
   ): Promise<void> {
     try {
       const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
-      const certificatesDir = path.join(uploadsDir, 'certificates_externals');
+      const certificatesDir = path.join(uploadsDir, '/reports/certificates_externals');
       const filePath = path.join(certificatesDir, fileName);
       
       if (!fs.existsSync(filePath)) {
@@ -149,10 +199,12 @@ export class ExternalController {
   // Método para generar el CSV
   private async generateCSV(
     groupedCertificates: any[],
+    usersRelationData: { users: UserWithCertificatesData[], certificateNames: string[], customFieldNames: string[] },
     startDate: string,
     endDate: string,
     filename: string
   ): Promise<string> {
+    const { customFieldNames } = usersRelationData;
     // Crear el directorio si no existe
     const uploadsDir = this.configService.get<string>('UPLOADS_DIR', path.join(process.cwd(), 'uploads'));
     const certificatesDir = path.join(uploadsDir, '/reports/certificates_externals');
@@ -168,51 +220,95 @@ export class ExternalController {
     const writeStream = fs.createWriteStream(filePath);
     writeStream.write('\uFEFF'); // BOM para UTF-8
     
-    // Escribir encabezados del CSV
-    writeStream.write(
-      'Estado,Cedula,Nombre,Apellido,Correo,Nombre del Certificado,Fecha de Emisión,Fecha de Vencimiento,Estado del Certificado,Ruta de archivo\n'
-    );
+
     
-    // Procesar cada certificado
-    for (const certificate of groupedCertificates) {
-      const certificateName = certificate.name;
+    // === HOJA 2: USUARIOS CON CERTIFICADOS HORIZONTALES (NUEVA) ===
+    
+    // Construir encabezados dinámicos
+    const baseHeaders = ['Estado', 'Cedula', 'Nombre', 'Apellido', 'Correo'];
+
+    // Agregar headers de campos personalizados
+    const customFieldHeaders = customFieldNames.map(fieldName => this.escapeCSV(fieldName));
+
+    const dynamicHeaders: string[] = [];
+    
+    // Para cada certificado, agregar sus columnas
+    for (const certName of usersRelationData.certificateNames) {
+      dynamicHeaders.push(
+        this.escapeCSV(certName),
+        'Archivos cargados',
+        'Activos', 
+        'Por vencer',
+        'Vencidos',
+        'Última carga',
+        'Último vencimiento',
+        'Información adicional'
+      );
+    }
+    
+    // Escribir encabezados completos
+    const allHeaders = [
+      ...baseHeaders.map(header => this.escapeCSV(header)), // ← CAMBIO: Escapar headers base
+      ...customFieldHeaders,
+      ...dynamicHeaders
+    ];
+    writeStream.write(allHeaders.join(',') + '\n');
+    
+    // Procesar cada usuario
+    for (const userData of usersRelationData.users) {
+      const firstName = userData.user_name || 'N/A';
+      const lastName = userData.user_last_name || 'N/A';
       
-      // Procesar cada usuario con sus certificados
-      for (const user of certificate.users) {
-        // Obtener nombre y apellido separados
-        const fullName = user.user_name;
-        const nameParts = fullName ? fullName.split(' ', 2) : ['N/A', 'N/A'];
-        const firstName = nameParts[0] || 'N/A';
-        const lastName = nameParts[1] || 'N/A';
-        const statusValidation = user.user_status;
+      // Datos básicos del usuario
+      const baseData = [
+        this.escapeCSV(userData.user_status),
+        this.escapeCSV(userData.user_identification),
+        this.escapeCSV(firstName),
+        this.escapeCSV(lastName),
+        this.escapeCSV(userData.user_email)
+      ];
+
+      // Datos de campos personalizados
+      const customFieldData = customFieldNames.map(fieldName => {
+        const fieldValue = userData.custom_fields.get(fieldName);
+        return this.escapeCSV(fieldValue || 'N/A');
+      });
+      
+      // Datos dinámicos de certificados
+      const certificateData: string[] = [];
+      
+      for (const certName of usersRelationData.certificateNames) {
+        const certData = userData.certificates.get(certName);
         
-        // Obtener estado traducido
-        const status = this.translateStatus(user.status);
-        const statusUser = statusValidation;
-        
-        // Procesar cada certificado del usuario
-        for (const userCertificate of user.certificates) {
-          const issueDate = userCertificate.issue_date || 'N/A';
-          const expiryDate = userCertificate.expiry_date || 'N/A';
-          const filePath = userCertificate.file_path || '';
-          
-          // Escapar campos y escribir fila en el CSV
-          const row = [
-            this.escapeCSV(statusUser),
-            this.escapeCSV(user.user_identification),
-            this.escapeCSV(firstName),
-            this.escapeCSV(lastName),
-            this.escapeCSV(user.user_email),
-            this.escapeCSV(certificateName),
-            this.escapeCSV(issueDate),
-            this.escapeCSV(expiryDate),
-            this.escapeCSV(status),
-            this.escapeCSV(filePath)
-          ].join(',');
-          
-          writeStream.write(row + '\n');
+        if (certData) {
+          certificateData.push(
+            this.escapeCSV(certData.relation),
+            this.escapeCSV(certData.total_files.toString()),
+            this.escapeCSV(certData.active_files.toString()),
+            this.escapeCSV(certData.expiring_files.toString()),
+            this.escapeCSV(certData.expired_files.toString()),
+            this.escapeCSV(certData.last_upload_date || 'N/A'),
+            this.escapeCSV(certData.last_expiry_date || 'N/A'),
+            this.escapeCSV(certData.aditional_info || 'N/A')
+          );
+        } else {
+          // Fallback en caso de que no exista el certificado
+          certificateData.push(
+            this.escapeCSV('N/A'),
+            this.escapeCSV('0'),
+            this.escapeCSV('0'),
+            this.escapeCSV('0'),
+            this.escapeCSV('0'),
+            this.escapeCSV('N/A'),
+            this.escapeCSV('N/A'),
+            this.escapeCSV('N/A')
+          );
         }
       }
+      
+      // Combinar datos básicos y de certificados
+      const completeRow = [...baseData, ...customFieldData, ...certificateData];
+      writeStream.write(completeRow.join(',') + '\n');
     }
     
     // Cerrar el stream y esperar a que termine
@@ -231,17 +327,198 @@ export class ExternalController {
       return '';
     }
     
-    value = String(value);
+    // Convertir a string y limpiar caracteres problemáticos
+    let str = String(value);
     
-    // Si el valor contiene coma, comilla o salto de línea, encerrarlo en comillas
-    if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
-      // Escapar las comillas duplicándolas
-      value = value.replace(/"/g, '""');
-      return `"${value}"`;
+    // Limpiar saltos de línea múltiples y caracteres de control
+    str = str.replace(/\r\n/g, ' '); // Windows line endings
+    str = str.replace(/\r/g, ' ');   // Mac line endings
+    str = str.replace(/\n/g, ' ');   // Unix line endings
+    str = str.replace(/\t/g, ' ');   // Tabs
+    str = str.trim();                // Espacios al inicio y final
+    
+    // Si el campo está vacío después de la limpieza
+    if (str === '') {
+      return '';
     }
     
-    return value;
+    // Si el valor contiene caracteres que requieren escape
+    if (str.includes(',') || 
+        str.includes('"') || 
+        str.includes('\n') || 
+        str.includes('\r') ||
+        str.startsWith(' ') ||  // Espacios al inicio
+        str.endsWith(' ')) {    // Espacios al final
+      
+      // Escapar las comillas duplicándolas según RFC 4180
+      str = str.replace(/"/g, '""');
+      return `"${str}"`;
+    }
+    
+    return str;
   }
+
+  private normalizeString(str: string): string {
+    if (!str) return '';
+    
+    return str
+      .normalize('NFD')                           // Descomponer caracteres con tildes
+      .replace(/[\u0300-\u036f]/g, '')           // Eliminar diacríticos (tildes, acentos)
+      .toUpperCase()                              // Convertir a mayúsculas
+      .replace(/\s+/g, ' ')                       // Múltiples espacios a uno solo
+      .trim();                                    // Eliminar espacios al inicio/fin
+  }
+
+  private async getUsersRelationData(
+    clientId: number,
+    startDate: string,
+    endDate: string,
+    searchUser: string,
+    searchEmail: string,
+    searchIdentification: string,
+    searchCertificate: string,
+    selectedCertificate: string
+  ): Promise<{ users: UserWithCertificatesData[], certificateNames: string[], customFieldNames: string[] }> {
+    // 1. Obtener todos los usuarios del cliente
+    let usersQuery = this.userRepository
+      .createQueryBuilder('user')
+      .where('user.client_id = :clientId', { clientId });
+  
+    // Aplicar filtros de usuario si existen
+    if (searchUser) {
+      usersQuery = usersQuery.andWhere('user.name LIKE :userName', { userName: `%${searchUser}%` });
+    }
+    if (searchEmail) {
+      usersQuery = usersQuery.andWhere('user.email LIKE :userEmail', { userEmail: `%${searchEmail}%` });
+    }
+    if (searchIdentification) {
+      usersQuery = usersQuery.andWhere('user.identification LIKE :userIdentification', { userIdentification: `%${searchIdentification}%` });
+    }
+  
+    const allUsers = await usersQuery.getMany();
+
+    const customFields = await this.customFieldRepository.find({
+      where: { client_id: clientId },
+      order: { order: 'ASC' }
+    });
+
+    const customFieldNames = customFields.map(field => field.name);
+
+    const userIds = allUsers.map(user => user.id);
+    const userCustomFieldsData = await this.userCustomFieldRepository.find({
+      where: { 
+        user_id: In(userIds),
+        custom_field_id: In(customFields.map(cf => cf.id))
+      },
+      relations: ['customField']
+    });
+
+    const userCustomFieldsMap = new Map<number, Map<string, string>>();
+
+    
+    // Inicializar mapa para cada usuario
+    for (const user of allUsers) {
+      userCustomFieldsMap.set(user.id, new Map());
+      
+      // Inicializar todos los campos personalizados como vacíos
+      for (const customField of customFields) {
+        userCustomFieldsMap.get(user.id)!.set(customField.name, '');
+      }
+    }
+
+    // Poblar valores reales de campos personalizados
+    for (const userCustomField of userCustomFieldsData) {
+      const userMap = userCustomFieldsMap.get(userCustomField.user_id);
+      if (userMap && userCustomField.customField) {
+        userMap.set(userCustomField.customField.name, userCustomField.value || '');
+      }
+    }
+
+    // 2. Obtener certificados procesados
+    const processedCertificates = await this.getCertificates(
+      clientId,
+      startDate,
+      endDate,
+      searchUser,
+      searchEmail,
+      searchIdentification,
+      searchCertificate,
+      selectedCertificate
+    );
+  
+    // 3. Obtener todos los nombres de certificados únicos y ordenarlos
+    const allCertificateNames: string[] = [];
+    const certificateNamesSet = new Set<string>();
+    
+    for (const certificate of processedCertificates.groupedCertificates) {
+      certificateNamesSet.add(certificate.name);
+    }
+    
+    allCertificateNames.push(...Array.from(certificateNamesSet).sort());
+  
+    // 4. Crear mapa de usuarios con sus certificados
+    const usersWithCertificates: UserWithCertificatesData[] = [];
+  
+    for (const user of allUsers) {
+      const userData: UserWithCertificatesData = {
+        user_id: user.id,
+        user_name: user.name || '',
+        user_last_name: user.last_name || '',
+        user_email: user.email || '',
+        user_identification: user.identification || 'N/A',
+        user_status: user.status_validation === 1 ? 'Activo' : 'Inactivo',
+        custom_fields: userCustomFieldsMap.get(user.id) || new Map(),
+        certificates: new Map()
+      };
+  
+      // Inicializar todos los certificados como N/A
+      for (const certName of allCertificateNames) {
+        userData.certificates.set(certName, {
+          relation: 'N/A',
+          total_files: 0,
+          active_files: 0,
+          expiring_files: 0,
+          expired_files: 0,
+          last_upload_date: '',
+          last_expiry_date: '',
+          aditional_info: ''
+        });
+      }
+  
+      // Poblar certificados del usuario
+      for (const certificate of processedCertificates.groupedCertificates) {
+        const userInCertificate = certificate.users.find((u: any) => u.user_id === user.id);
+        
+        
+        if (userInCertificate) {
+          // this.logger.log(`[getUsersRelationData] userId=${user.id} cert="${certificate.name}" last_expiry_date=${userInCertificate.last_expiry_date}`);
+          // Usuario tiene este certificado
+          userData.certificates.set(certificate.name, {
+            relation: 'Asignado',
+            total_files: userInCertificate.certificates_count || 0,
+            active_files: userInCertificate.active_certificates || 0,
+            expiring_files: userInCertificate.certificates?.filter((cert: any) => cert.is_expiring)?.length || 0,
+            expired_files: userInCertificate.certificates?.filter((cert: any) => cert.is_expired)?.length || 0,
+            last_upload_date: userInCertificate.last_upload_date || '',
+            last_expiry_date: userInCertificate.last_expiry_date || '',
+            aditional_info: userInCertificate.aditional_info || ''
+          });
+        }
+      }
+  
+      usersWithCertificates.push(userData);
+    }
+  
+    // 5. Ordenar usuarios por nombre
+    usersWithCertificates.sort((a, b) => a.user_name.localeCompare(b.user_name));
+  
+    return {
+      users: usersWithCertificates,
+      certificateNames: allCertificateNames,
+      customFieldNames: customFieldNames
+    };
+  }
+
   
 
   // Método principal para obtener los certificados
@@ -279,7 +556,7 @@ export class ExternalController {
         .andWhere('uc.name = :selectedName', { selectedName: selectedCertificate });
     }
     
-    // Aplicar filtros de usuario
+    // Aplicar filtros de usuario - USAR INNER JOIN para garantizar que existe el usuario
     if (searchUser || searchEmail || searchIdentification) {
       userCertificatesQuery = userCertificatesQuery
         .innerJoin('uc.user', 'user');
@@ -300,9 +577,10 @@ export class ExternalController {
       }
     }
     
-    // Obtener certificados con usuarios
+    // CAMBIO CRÍTICO: Usar INNER JOIN en lugar de LEFT JOIN para garantizar usuarios válidos
     const userCertificates = await userCertificatesQuery
-      .leftJoinAndSelect('uc.user', 'ucUser')
+      .innerJoinAndSelect('uc.user', 'ucUser') // Cambio de leftJoinAndSelect a innerJoinAndSelect
+      .andWhere('ucUser.id IS NOT NULL') // Filtro adicional para seguridad
       .getMany();
     
     // Procesar y agrupar los certificados por nombre
@@ -356,11 +634,12 @@ export class ExternalController {
       }
     }
     
-    // Obtener documentos con requisitos y documentos de usuario
+    // CAMBIO: También usar INNER JOIN para documentos
     const documents = await documentsQuery
-      .leftJoinAndSelect('doc.documentRequirements', 'docReq')
-      .leftJoinAndSelect('doc.userDocuments', 'userDoc')
-      .leftJoinAndSelect('userDoc.user', 'userDocUser')
+      .innerJoinAndSelect('doc.documentRequirements', 'docReq')
+      .innerJoinAndSelect('doc.userDocuments', 'userDoc')
+      .innerJoinAndSelect('userDoc.user', 'userDocUser')
+      .andWhere('userDocUser.id IS NOT NULL') // Filtro adicional
       .getMany();
     
     // Procesar documentos
@@ -390,9 +669,29 @@ export class ExternalController {
     const now = dayjs();
     const thirtyDaysFromNow = now.add(30, 'day');
     
+    this.logger.log(`Processing ${userCertificates.length} user certificates`);
+    
+    // FILTRAR certificados con usuarios válidos primero
+    const validCertificates = userCertificates.filter((cert, index) => {
+      if (!cert.user) {
+        this.logger.warn(`Certificate at index ${index} has null user. Cert ID: ${cert.id}, User ID: ${cert.user_id}`);
+        return false;
+      }
+      
+      // Verificar propiedades mínimas del usuario
+      if (!cert.user.name && !cert.user.email && !cert.user.identification) {
+        this.logger.warn(`Certificate has user with incomplete data. User ID: ${cert.user.id}`);
+        return false;
+      }
+      
+      return true;
+    });
+    
+    this.logger.log(`Filtered to ${validCertificates.length} valid certificates`);
+    
     // Agrupar por nombre
-    const certificatesByName = userCertificates.reduce((groups, cert) => {
-      const name = cert.name;
+    const certificatesByName = validCertificates.reduce((groups, cert) => {
+      const name = cert.name || 'Sin nombre'; // Manejar nombres nulos
       if (!groups[name]) {
         groups[name] = [];
       }
@@ -408,11 +707,30 @@ export class ExternalController {
       
       for (const cert of userCerts) {
         const userId = cert.user_id;
+        
+        // VALIDACIÓN ADICIONAL: Verificar que user existe y tiene ID
+        if (!cert.user || !cert.user.id) {
+          this.logger.warn(`Skipping certificate ${cert.id} - invalid user data`);
+          continue;
+        }
+        
         if (!userMap.has(userId)) {
           userMap.set(userId, {
             user: cert.user,
-            certificates: []
+            certificates: [],
+            createdDates: [],
+            expiryDates: []
           });
+        }
+
+        // NUEVO: Agregar fecha de creación si existe
+        if (cert.created_at) {
+          userMap.get(userId).createdDates.push(dayjs(cert.created_at));
+        }
+
+        if (cert.expiry_date) {
+          userMap.get(userId).expiryDates.push(dayjs(cert.expiry_date));
+          // this.logger.log(`[processUserCertificates] userId=${userId} expiry_date=${cert.expiry_date}`);
         }
         
         // Determinar estados
@@ -420,8 +738,7 @@ export class ExternalController {
         let isExpiring = false;
         let isExpired = false;
         let daysUntilExpiry: number | null = null;
-
-        
+  
         if (cert.expiry_date) {
           const expiryDate = dayjs(cert.expiry_date);
           isExpiring = expiryDate.isAfter(now) && expiryDate.isBefore(thirtyDaysFromNow);
@@ -430,14 +747,16 @@ export class ExternalController {
         }
         
         userMap.get(userId).certificates.push({
-          certificate_type: cert.name,
-          file_path: cert.file_path,
+          certificate_type: cert.name || 'Sin tipo',
+          file_path: cert.file_path || '',
           issue_date: cert.issue_date ? dayjs(cert.issue_date).format('DD/MM/YYYY') : 'N/A',
           expiry_date: cert.expiry_date ? dayjs(cert.expiry_date).format('DD/MM/YYYY') : 'N/A',
           is_active: isActive,
           is_expiring: isExpiring,
           is_expired: isExpired,
-          days_until_expiry: daysUntilExpiry
+          days_until_expiry: daysUntilExpiry,
+          additional_info: cert.additional_info || '',
+          created_at: cert.created_at ? dayjs(cert.created_at).format('DD/MM/YYYY HH:mm') : 'N/A'
         });
       }
       
@@ -445,6 +764,31 @@ export class ExternalController {
       const users = Array.from(userMap.entries()).map(([userId, userData]) => {
         const user = userData.user;
         const certificatesList = userData.certificates;
+        const createdDates = userData.createdDates;
+        const expiryDates: dayjs.Dayjs[] = userData.expiryDates;
+        
+        // VALIDACIÓN FINAL: Asegurar que user no es null
+        if (!user) {
+          this.logger.error(`User is null for userId: ${userId}`);
+          return null;
+        }
+
+        // Calcular la fecha más reciente de carga
+        let lastUploadDate = 'N/A';
+        if (createdDates.length > 0) {
+          const latestDate = createdDates.reduce((latest, current) => {
+            return current.isAfter(latest) ? current : latest;
+          });
+          lastUploadDate = latestDate.format('DD/MM/YYYY HH:mm');
+        }
+
+        let lastExpiryDate: string | null = null;
+        if (expiryDates.length > 0) {
+          const latestExpiry = expiryDates.reduce((latest, current) =>
+            current.isAfter(latest) ? current : latest
+          );
+          lastExpiryDate = latestExpiry.format('DD/MM/YYYY');
+        }
         
         // Determinar estado general del usuario
         let status = 'active';
@@ -453,19 +797,28 @@ export class ExternalController {
         } else if (certificatesList.some(cert => cert.is_expiring)) {
           status = 'expiring';
         }
+
+        const aggregatedAdditionalInfo = certificatesList
+          .map((c: any) => c.additional_info)
+          .filter((v: any) => v && v.trim() !== '')
+          .join(' | ');
         
         return {
           user_id: userId,
-          user_name: user.name,
-          user_email: user.email,
+          user_name: user.name || 'Sin nombre', // PROTECCIÓN CONTRA NULL
+          user_email: user.email || 'Sin email', // PROTECCIÓN CONTRA NULL
           user_identification: user.identification || 'N/A',
           user_status: user.status_validation === 1 ? 'Activo' : 'Inactivo',
           status: status,
           certificates_count: certificatesList.length,
           active_certificates: certificatesList.filter(cert => cert.is_active).length,
-          certificates: certificatesList
+          // Fecha del último archivo cargado
+          last_upload_date: lastUploadDate,
+          last_expiry_date: lastExpiryDate,
+          aditional_info: aggregatedAdditionalInfo,
+          certificates: certificatesList,
         };
-      });
+      }).filter(user => user !== null); // FILTRAR usuarios nulos
       
       // Contar archivos por estado
       let activeFiles = 0;
@@ -483,6 +836,16 @@ export class ExternalController {
           }
         }
       }
+
+      let groupLastExpiryDate: string | null = null;
+      for (const user of users) {
+        if (user.last_expiry_date) {
+          const d = dayjs(user.last_expiry_date, 'DD/MM/YYYY');
+          if (!groupLastExpiryDate || d.isAfter(dayjs(groupLastExpiryDate, 'DD/MM/YYYY'))) {
+            groupLastExpiryDate = user.last_expiry_date;
+          }
+        }
+      }
       
       return {
         name: name.trim().toUpperCase(),
@@ -492,6 +855,8 @@ export class ExternalController {
         expiring_files: expiringFiles,
         expired_files: expiredFiles,
         certificate_types: ['UserCertificate'],
+        last_expiry_date: groupLastExpiryDate,
+        additional_info: userCerts[0]?.additional_info || '',
         users: users
       };
     });
@@ -514,8 +879,20 @@ export class ExternalController {
         if (!userMap.has(userId)) {
           userMap.set(userId, {
             user: userDoc.user,
-            certificates: []
+            certificates: [],
+            createdDates: [],
+            expiryDates: []
           });
+        }
+
+        // Agregar fecha de creación si existe
+        if (userDoc.created_at) {
+          userMap.get(userId).createdDates.push(dayjs(userDoc.created_at));
+        }
+
+        if (userDoc.expiry_date) {
+          userMap.get(userId).expiryDates.push(dayjs(userDoc.expiry_date));
+          // this.logger.log(`[processUserDocuments] userId=${userId} expiry_date=${userDoc.expiry_date}`);
         }
         
         // Determinar estados
@@ -539,7 +916,9 @@ export class ExternalController {
           is_active: isActive,
           is_expiring: isExpiring,
           is_expired: isExpired,
-          days_until_expiry: daysUntilExpiry
+          days_until_expiry: daysUntilExpiry,
+          // Incluir fecha de creación formateada
+          created_at: userDoc.created_at ? dayjs(userDoc.created_at).format('DD/MM/YYYY HH:mm') : 'N/A'
         });
       }
       
@@ -547,6 +926,25 @@ export class ExternalController {
       const users = Array.from(userMap.entries()).map(([userId, userData]) => {
         const user = userData.user;
         const certificatesList = userData.certificates;
+        const createdDates = userData.createdDates;
+        const expiryDates: dayjs.Dayjs[] = userData.expiryDates;
+
+        // Calcular la fecha más reciente de carga
+        let lastUploadDate = 'N/A';
+        if (createdDates.length > 0) {
+          const latestDate = createdDates.reduce((latest, current) => {
+            return current.isAfter(latest) ? current : latest;
+          });
+          lastUploadDate = latestDate.format('DD/MM/YYYY HH:mm');
+        }
+
+        let lastExpiryDate: string | null = null;
+        if (expiryDates.length > 0) {
+          const latestExpiry = expiryDates.reduce((latest, current) =>
+            current.isAfter(latest) ? current : latest
+          );
+          lastExpiryDate = latestExpiry.format('DD/MM/YYYY');
+        }
         
         // Determinar estado general del usuario
         let status = 'active';
@@ -555,16 +953,26 @@ export class ExternalController {
         } else if (certificatesList.some(cert => cert.is_expiring)) {
           status = 'expiring';
         }
+
+        const aggregatedAdditionalInfo = certificatesList
+          .map((c: any) => c.aditional_info)   // UserDocument usa 'aditional_info' (typo heredado)
+          .filter((v: any) => v && v.trim() !== '')
+          .join(' | ');
         
         return {
           user_id: userId,
           user_name: user.name,
+          user_last_name: user.last_name,
           user_email: user.email,
           user_identification: user.identification || 'N/A',
           user_status: user.status_validation === 1 ? 'Activo' : 'Inactivo',
           status: status,
           certificates_count: certificatesList.length,
           active_certificates: certificatesList.filter(cert => cert.is_active).length,
+          // Fecha del último archivo cargado
+          last_upload_date: lastUploadDate,
+          last_expiry_date: lastExpiryDate,
+          aditional_info: aggregatedAdditionalInfo,
           certificates: certificatesList
         };
       });
@@ -585,6 +993,16 @@ export class ExternalController {
           }
         }
       }
+
+      let groupLastExpiryDate: string | null = null;
+      for (const user of users) {
+        if (user.last_expiry_date) {
+          const d = dayjs(user.last_expiry_date, 'DD/MM/YYYY');
+          if (!groupLastExpiryDate || d.isAfter(dayjs(groupLastExpiryDate, 'DD/MM/YYYY'))) {
+            groupLastExpiryDate = user.last_expiry_date;
+          }
+        }
+      }
       
       return {
         name: name.trim().toUpperCase(),
@@ -594,6 +1012,7 @@ export class ExternalController {
         expiring_files: expiringFiles,
         expired_files: expiredFiles,
         certificate_types: ['UserDocument'],
+        last_expiry_date: groupLastExpiryDate,
         users: users
       };
     });
@@ -602,24 +1021,34 @@ export class ExternalController {
   // Método para agrupar certificados por nombre (continuación)
   private groupCertificatesByName(certificates: any[]): any[] {
     const groupedMap = new Map();
+
+    const isLaterDate = (a: string | null, b: string | null): boolean => {
+      if (!a) return false;
+      if (!b) return true;
+      return dayjs(a, 'DD/MM/YYYY').isAfter(dayjs(b, 'DD/MM/YYYY'));
+    };
     
     for (const certificate of certificates) {
       const name = certificate.name;
+      const normalizedName = this.normalizeString(name); // Clave normalizada
       
-      if (!groupedMap.has(name)) {
-        groupedMap.set(name, {
-          name: name,
+      if (!groupedMap.has(normalizedName)) {
+        groupedMap.set(normalizedName, {
+          name: name, // Mantener el primer nombre encontrado como display
+          normalizedName: normalizedName, // Guardar el normalizado también
           users_count: 0,
           total_files: 0,
           active_files: 0,
           expiring_files: 0,
           expired_files: 0,
           certificate_types: [],
+          last_expiry_date: null as string | null,
+          additional_info: certificate.additional_info || '',
           users: []
         });
       }
       
-      const group = groupedMap.get(name);
+      const group = groupedMap.get(normalizedName);
       
       // Actualizar estadísticas
       group.total_files += certificate.total_files;
@@ -627,6 +1056,11 @@ export class ExternalController {
       group.expiring_files += certificate.expiring_files;
       group.expired_files += certificate.expired_files;
       group.certificate_types = [...new Set([...group.certificate_types, ...certificate.certificate_types])];
+
+
+      if (isLaterDate(certificate.last_expiry_date, group.last_expiry_date)) {
+        group.last_expiry_date = certificate.last_expiry_date;
+      }
       
       // Combinar usuarios
       for (const user of certificate.users) {
@@ -638,6 +1072,17 @@ export class ExternalController {
           existingUser.certificates_count += user.certificates_count;
           existingUser.active_certificates += user.active_certificates;
           existingUser.certificates = [...existingUser.certificates, ...user.certificates];
+          
+          // Actualizar última fecha de carga si es más reciente
+          if (user.last_upload_date && (!existingUser.last_upload_date || user.last_upload_date > existingUser.last_upload_date)) {
+            existingUser.last_upload_date = user.last_upload_date;
+          }
+
+          if (isLaterDate(user.last_expiry_date, existingUser.last_expiry_date)) {
+            existingUser.last_expiry_date = user.last_expiry_date;
+          }
+
+          this.logger.log(`[groupCertificates] usuario=${user.user_id} incoming=${user.last_expiry_date} existing=${existingUser.last_expiry_date}`);
           
           // Actualizar estado si es necesario
           if (user.status === 'expired' || existingUser.status === 'expired') {
@@ -655,9 +1100,9 @@ export class ExternalController {
       group.users_count = group.users.length;
     }
     
-    // Convertir mapa a array y ordenar por nombre
+    // Convertir mapa a array y ordenar por nombre normalizado
     return Array.from(groupedMap.values())
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.normalizedName.localeCompare(b.normalizedName));
   }
   
   // Método para verificar si un certificado es válido

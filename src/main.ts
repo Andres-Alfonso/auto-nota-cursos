@@ -5,6 +5,7 @@ import * as hbs from 'hbs';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { registerHandlebarsHelpers } from './handlebars-helpers';
+import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
@@ -17,6 +18,10 @@ async function bootstrap() {
   //   credentials: true,
   // });
   // app.enableShutdownHooks();
+
+  // Aumentar el tamaño permitido para JSON y URL encoded
+  app.use(bodyParser.json({ limit: '5mb' }));
+  app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
 
   app.setGlobalPrefix('api/v1', {
     exclude: ['/ve*path'], // Excluye las rutas que empiezan con '/ve'

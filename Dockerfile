@@ -4,7 +4,8 @@ WORKDIR /usr/src/app
 # Alias de construcción que extiende de base
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci
+# RUN npm ci
+RUN npm install
 
 # Stage 3: Builder - Copia el código fuente y construye la aplicación
 FROM deps AS builder
@@ -42,7 +43,7 @@ COPY --from=deps /usr/src/app/node_modules ./node_modules
 EXPOSE 3000
 
 # Comando por defecto para iniciar la aplicación compilada
-CMD ["node", "dist/main.js"]
+CMD ["node", "--max-old-space-size=8192", "dist/main.js"]
 
 FROM deps AS development
 # Re-copia el código por si acaso, aunque deps ya lo hizo para package*.json

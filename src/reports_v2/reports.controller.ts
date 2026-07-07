@@ -37,14 +37,25 @@ import {
           search_email, 
           search_identification, 
           search_course, 
-          club_id 
+          club_id,
+          club_ids, // Nuevo campo para múltiples IDs
+          clubStatus,
+          orderBy
         } = requestData;
-  
+
         // Validar datos obligatorios
         if (!client_id || !user_id) {
           throw new HttpException('Faltan datos obligatorios', HttpStatus.BAD_REQUEST);
         }
-  
+
+        // Manejar club_ids (puede venir como array o como club_id único)
+        let finalClubIds: number[] | undefined;
+        if (club_ids && Array.isArray(club_ids)) {
+          finalClubIds = club_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+        } else if (club_id) {
+          finalClubIds = [parseInt(club_id, 10)].filter(id => !isNaN(id));
+        }
+
         // Iniciar generación del reporte
         await this.courseMetricsService.generateCourseStatusReport(
           client_id,
@@ -55,9 +66,11 @@ import {
           search_email || '',
           search_identification || '',
           search_course || '',
-          club_id ? parseInt(club_id, 10) : undefined
+          finalClubIds, // Pasar array de club IDs
+          clubStatus,
+          orderBy
         );
-  
+
         return {
           statusCode: HttpStatus.ACCEPTED,
           message: 'La generación del reporte ha sido iniciada. Recibirás una notificación cuando esté listo.',

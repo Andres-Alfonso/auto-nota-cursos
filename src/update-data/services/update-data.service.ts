@@ -10,6 +10,18 @@ import { unlink } from 'fs/promises';
 import * as ExcelJS from 'exceljs';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ProcessReport } from '../interfaces/process-report.interface';
+import { Club } from 'src/reports_v2/entities/club.entity';
+import { ClubUser } from 'src/reports_v2/entities/club-user.entity';
+
+
+interface UserRow {
+  CEDULA: string;
+  NOMBRE: string;
+  SERVICIO: string;
+  CARGO: string;
+  'TIPO DE CARGO': string;
+}
 
 @Injectable()
 export class UpdateDataService {
@@ -18,6 +30,10 @@ export class UpdateDataService {
     constructor(
         @InjectRepository(User)
         private userRepository: Repository<User>,
+        @InjectRepository(Club)
+        private clubRepository: Repository<Club>,
+        @InjectRepository(ClubUser)
+        private clubUserRepository: Repository<ClubUser>,
         private dataSource: DataSource,
     ) { }
 
@@ -280,4 +296,264 @@ export class UpdateDataService {
             this.logger.error(`Error generando reporte: ${error.message}`);
         }
     }
+
+  async processUsersAndClubs(
+    usersFilePath: string,
+    clubsFilePath: string,
+    clientId: number
+  ): Promise<ProcessReport> {
+    const report: ProcessReport = {
+      totalUsersProcessed: 0,
+      totalCoursesProcessed: 0,
+      validUsers: 0,
+      invalidUsers: 0,
+      usersNotFound: 0,
+      clubUsersDeleted: 0,
+      clubUsersCreated: 0,
+      errors: [],
+      warnings: [],
+      summary: ''
+    };
+
+    this.logger.log(`Starting process for clientId: ${clientId}`);
+
+    try {
+      // 1. Leer archivos Excel
+      const usersData = await this.readUsersExcel(usersFilePath);
+      const clubsData = await this.readClubsExcel(clubsFilePath);
+
+      report.totalUsersProcessed = usersData.length;
+      report.totalCoursesProcessed = clubsData.length;
+
+      this.logger.log(`Read ${usersData.length} users and ${clubsData.length} clubs from Excel files`);
+
+      // 2. Obtener clubs válidos de la base de datos
+      const validClubs = await this.getValidClubs(clubsData, clientId, report);
+
+      // 3. Procesar usuarios
+      const validUserIds = await this.processUsers(usersData, clientId, report);
+
+      // 4. Limpiar y asignar usuarios a clubs
+      await this.cleanAndAssignUserClubs(validUserIds, validClubs, clientId, report);
+
+      // 5. Generar resumen
+      this.generateSummary(report);
+
+      this.logger.log('Process completed successfully');
+      return report;
+
+    } catch (error) {
+      this.logger.error('Error processing files:', error);
+      report.errors.push({
+        type: 'DATABASE_ERROR',
+        message: `Error processing files: ${error.message}`,
+        data: error
+      });
+      return report;
+    }
+  }
+
+  private async readUsersExcel(filePath: string): Promise<UserRow[]> {
+    try {
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json<UserRow>(worksheet);
+      
+      return data.filter(row => row.CEDULA && row.CEDULA.toString().trim() !== '');
+    } catch (error) {
+      this.logger.error('Error reading users Excel file:', error);
+      throw new Error(`Error reading users Excel file: ${error.message}`);
+    }
+  }
+
+  private async readClubsExcel(filePath: string): Promise<string[]> {
+    try {
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
+      
+      return data
+        .map(row => row[0] as string | number | null | undefined)
+        .filter((course): course is string | number => 
+          course !== null && course !== undefined && course.toString().trim() !== ''
+        )
+        .map(course => course.toString().trim());
+    } catch (error) {
+      this.logger.error('Error reading clubs Excel file:', error);
+      throw new Error(`Error reading clubs Excel file: ${error.message}`);
+    }
+  }
+
+  private async getValidClubs(clubNames: string[], clientId: number, report: ProcessReport): Promise<Club[]> {
+    const validClubs: Club[] = [];
+
+    for (const clubName of clubNames) {
+      try {
+        const club = await this.clubRepository
+          .createQueryBuilder('club')
+          .leftJoinAndSelect('club.clubTranslation', 'translation')
+          .where('club.client_id = :clientId', { clientId })
+          .andWhere('(club.name = :clubName OR translation.title = :clubName)', { clubName })
+          .getOne();
+
+        if (club) {
+          validClubs.push(club);
+          this.logger.log(`Found club: ${clubName} (ID: ${club.id})`);
+        } else {
+          report.errors.push({
+            type: 'CLUB_NOT_FOUND',
+            message: `Club not found: ${clubName}`,
+            data: { clubName, clientId }
+          });
+          this.logger.warn(`Club not found: ${clubName}`);
+        }
+      } catch (error) {
+        report.errors.push({
+          type: 'DATABASE_ERROR',
+          message: `Error searching club: ${clubName}`,
+          data: error
+        });
+      }
+    }
+
+    return validClubs;
+  }
+
+  private async processUsers(usersData: UserRow[], clientId: number, report: ProcessReport): Promise<number[]> {
+    const validUserIds: number[] = [];
+
+    for (const userRow of usersData) {
+      if (!userRow.CEDULA) {
+        report.warnings.push({
+          type: 'EMPTY_ROW',
+          message: 'Empty identification found',
+          data: userRow
+        });
+        continue;
+      }
+
+      const identification = userRow.CEDULA.toString().trim();
+
+      try {
+        const user = await this.userRepository.findOne({
+          where: {
+            identification,
+            client_id: clientId
+          }
+        });
+
+        if (user) {
+          validUserIds.push(user.id);
+          report.validUsers++;
+          this.logger.log(`Found user: ${identification} (ID: ${user.id})`);
+        } else {
+          report.usersNotFound++;
+          report.errors.push({
+            type: 'USER_NOT_FOUND',
+            message: `User not found: ${identification}`,
+            data: { identification, clientId }
+          });
+          this.logger.warn(`User not found: ${identification}`);
+        }
+      } catch (error) {
+        report.invalidUsers++;
+        report.errors.push({
+          type: 'DATABASE_ERROR',
+          message: `Error searching user: ${identification}`,
+          data: error
+        });
+      }
+    }
+
+    return validUserIds;
+  }
+
+  private async cleanAndAssignUserClubs(
+    validUserIds: number[], 
+    validClubs: Club[], 
+    clientId: number, 
+    report: ProcessReport
+  ): Promise<void> {
+    const validClubIds = validClubs.map(club => club.id);
+
+    try {
+      // 1. Eliminar registros de usuarios que NO están en la lista válida
+      // pero que tienen asignaciones a los clubs del cliente
+      const deleteResult = await this.clubUserRepository
+        .createQueryBuilder()
+        .delete()
+        .where('user_id NOT IN (:...validUserIds)', { validUserIds: validUserIds.length > 0 ? validUserIds : [-1] })
+        .andWhere('club_id IN (SELECT id FROM clubs WHERE client_id = :clientId)', { clientId })
+        .execute();
+
+      report.clubUsersDeleted += deleteResult.affected || 0;
+
+      // 2. Para cada usuario válido, eliminar asignaciones a clubs que NO están en la lista válida
+      if (validUserIds.length > 0) {
+        const cleanupResult = await this.clubUserRepository
+          .createQueryBuilder()
+          .delete()
+          .where('user_id IN (:...validUserIds)', { validUserIds })
+          .andWhere('club_id IN (SELECT id FROM clubs WHERE client_id = :clientId)', { clientId })
+          .andWhere('club_id NOT IN (:...validClubIds)', { validClubIds: validClubIds.length > 0 ? validClubIds : [-1] })
+          .execute();
+
+        report.clubUsersDeleted += cleanupResult.affected || 0;
+      }
+
+      // 3. Asignar usuarios a clubs válidos (solo si no existen)
+      for (const userId of validUserIds) {
+        for (const club of validClubs) {
+          const existingAssignment = await this.clubUserRepository.findOne({
+            where: {
+              user_id: userId,
+              club_id: club.id
+            }
+          });
+
+          if (!existingAssignment) {
+            await this.clubUserRepository.save({
+              user_id: userId,
+              club_id: club.id
+            });
+            report.clubUsersCreated++;
+            this.logger.log(`Assigned user ${userId} to club ${club.id}`);
+          }
+        }
+      }
+
+    } catch (error) {
+      this.logger.error('Error managing club user assignments:', error);
+      report.errors.push({
+        type: 'DATABASE_ERROR',
+        message: 'Error managing club user assignments',
+        data: error
+      });
+    }
+  }
+
+  private generateSummary(report: ProcessReport): void {
+    const errorCount = report.errors.length;
+    const warningCount = report.warnings.length;
+
+    report.summary = `
+Process completed:
+- ${report.totalUsersProcessed} users processed from Excel
+- ${report.totalCoursesProcessed} courses processed from Excel  
+- ${report.validUsers} valid users found in database
+- ${report.usersNotFound} users not found in database
+- ${report.clubUsersDeleted} club-user assignments deleted
+- ${report.clubUsersCreated} club-user assignments created
+- ${errorCount} errors encountered
+- ${warningCount} warnings generated
+    `.trim();
+
+    if (errorCount > 0) {
+      this.logger.warn(`Process completed with ${errorCount} errors`);
+    } else {
+      this.logger.log('Process completed successfully with no errors');
+    }
+  }
 }

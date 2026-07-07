@@ -16,12 +16,14 @@ export class AppController {
     const clubs = clientId 
       ? await this.appService.findByClientId(clientId, locale)
       : await this.appService.findAll(locale);
+
+    const groupedClubs = groupByFirstLetter(clubs); // Agrupar por primera letra
     
     return { 
       message: '¡Homologar notas!',
       title: 'Homologación Notas',
       pageCss: 'home',
-      clubs: clubs // Pasar los datos a la vista
+      groupedClubs: groupedClubs // Pasar los datos a la vista
     };
   }
 
@@ -77,4 +79,27 @@ export class AppController {
       content: 'Aquí puedes encontrar información de contacto.'
     };
   }
+}
+
+
+function groupByFirstLetter(clubs: any[]) {
+  const grouped = {};
+
+  clubs.forEach(club => {
+    const firstLetter = club.title.charAt(0).toUpperCase();
+    if (!grouped[firstLetter]) {
+      grouped[firstLetter] = [];
+    }
+    grouped[firstLetter].push(club);
+  });
+
+  // Opcional: ordenar las letras
+  const sortedGroups = Object.keys(grouped)
+    .sort()
+    .reduce((obj, key) => {
+      obj[key] = grouped[key].sort((a, b) => a.title.localeCompare(b.title));
+      return obj;
+    }, {});
+
+  return sortedGroups;
 }

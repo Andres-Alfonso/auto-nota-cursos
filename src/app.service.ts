@@ -27,7 +27,7 @@ export class AppService {
         name: club.name,
         title: translation?.title || club.name, // Usar el nombre como fallback
       };
-    });
+    }).sort((a, b) => a.title.localeCompare(b.title));
 
     // Método 2 (Alternativo): Usando una consulta personalizada
     /*
@@ -59,6 +59,6 @@ export class AppService {
         title: translation?.title || club.name,
         client_id: club.client_id
       };
-    });
+    }).sort((a, b) => a.title.localeCompare(b.title));
   }
 }
