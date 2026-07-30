@@ -14,6 +14,7 @@ import { EvaluationClub } from './entities/evaluation-club.entity';
 import { EvaluationUser } from './entities/evaluation-user.entity';
 import { Answer } from './entities/answer.entity';
 import { ClubTranslation } from './entities/club-translation.entity';
+import { MetricGeneralService } from './services/metrics-general.service';
 
 @Module({
   imports: [
@@ -33,7 +34,7 @@ import { ClubTranslation } from './entities/club-translation.entity';
     ]),
   ],
   controllers: [ReportsController],
-  providers: [CourseMetricsService],
-  exports: [CourseMetricsService],
+  providers: [CourseMetricsService, MetricGeneralService],
+  exports: [CourseMetricsService, MetricGeneralService],
 })
 export class ReportsModule {}
