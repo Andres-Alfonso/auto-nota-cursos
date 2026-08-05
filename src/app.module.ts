@@ -14,6 +14,7 @@ import { ExternalModule } from './certificates_external/external.module';
 import { UpdateProgressModule } from './update-progress/update-progress.module';
 import { UpdateDataModule } from './update-data/update-data.module';
 import { MetricGeneralModule } from './reports_v2/metrics-general.module';
+import { RestoresModule } from './restores/restores.module';
 
 
 @Module({
@@ -43,6 +44,7 @@ import { MetricGeneralModule } from './reports_v2/metrics-general.module';
       synchronize: false,
     }),
     TypeOrmModule.forFeature([Club, ClubTranslation]),
+    RestoresModule,
   ],
   controllers: [AppController],
   providers: [AppService],
