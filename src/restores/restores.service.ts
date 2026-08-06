@@ -49,6 +49,7 @@ interface IdMap {
     sections: NumMap;
     videorooms: NumMap;
     contents: NumMap;
+    scorms: NumMap;
     evaluations: NumMap;
     questions: NumMap;
     options: NumMap;
@@ -62,7 +63,41 @@ interface IdMap {
     answerComments: NumMap;
     selftEvaluations: NumMap;
     questionsSelft: NumMap;
+    // Mini-juegos (referenciados por detail_video_room_activitaties.id_activities
+    // y por user_pogress_video_room_activities.id_activity, según el campo `type`)
+    games: {
+        alphabetSoup: NumMap;
+        completeSentences: NumMap;
+        crossword: NumMap;
+        dragDrop: NumMap;
+        hangingGame: NumMap;
+        memoryGame: NumMap;
+        timeSequence: NumMap;
+    };
 }
+
+/**
+ * ⚠ VERIFICAR: valores reales que guarda la columna `type` en
+ * detail_video_room_activitaties y user_pogress_video_room_activities.
+ * Estos son los nombres más probables dados los nombres de tabla/clase;
+ * confírmalos con `SELECT DISTINCT type FROM detail_video_room_activitaties`
+ * y ajusta las claves de este mapa si no coinciden.
+ */
+const GAME_TYPE_MAP: Record<string, keyof IdMap['games']> = {
+    alphabet_soup: 'alphabetSoup',
+    alphabet_soups: 'alphabetSoup',
+    complete_sentences: 'completeSentences',
+    crossword: 'crossword',
+    crosswords: 'crossword',
+    drag_drop: 'dragDrop',
+    drag_drops: 'dragDrop',
+    hanging_game: 'hangingGame',
+    hanging_games: 'hangingGame',
+    memory_game: 'memoryGame',
+    memory_games: 'memoryGame',
+    time_sequence: 'timeSequence',
+    time_sequences: 'timeSequence',
+};
 
 export interface RestoreReport {
     dryRun: boolean;
@@ -181,17 +216,19 @@ export class RestoresService {
             finishedAt: null,
         };
 
+        this.logger.log(`[club ${dto.clubId}] ${dryRun ? 'DRY-RUN' : 'RUN REAL'} — conectando al backup...`);
         const backup = await this.buildBackupDataSource(dto);
         const qr = this.prodDs.createQueryRunner();
         await qr.connect();
 
-        const engine = new CopyEngine(qr, backup, report);
+        const engine = new CopyEngine(qr, backup, report, this.logger, dto.clubId);
         const idMap = this.emptyIdMap();
 
         try {
             // Raíz en backup
             const [club] = await backup.query('SELECT * FROM `clubs` WHERE id = ? LIMIT 1', [dto.clubId]);
             if (!club) throw new NotFoundException(`Club ${dto.clubId} no encontrado en el backup`);
+            this.logger.log(`[club ${dto.clubId}] "${club.name}" encontrado en el backup — iniciando copia (12 fases)...`);
 
             // Estado previo en producción
             const [prodClub] = await qr.query(
@@ -213,16 +250,36 @@ export class RestoresService {
             await qr.startTransaction();
             if (dto.disableFkChecks) await qr.query('SET FOREIGN_KEY_CHECKS = 0');
 
-            // ─── Orden topológico ────────────────────────────────────────────────
-            await this.restoreClubCore(engine, club, idMap);
-            await this.restoreSections(engine, club, idMap);
-            await this.restoreMembers(engine, dto.clubId, idMap);
-            await this.restoreSocial(engine, dto.clubId, idMap);
-            await this.restoreEvaluations(engine, dto.clubId, idMap);
-            await this.restoreContents(engine, dto.clubId, idMap);
-            await this.restoreVideorooms(engine, dto.clubId, idMap);
-            await this.restoreUserData(engine, dto.clubId, idMap);
-            await this.restoreFinalPivots(engine, dto.clubId, idMap);
+            // ─── Orden topológico (con progreso por fase, log en consola) ─────────
+            const phases: Array<[string, () => Promise<void>]> = [
+                ['Club raíz + traducciones', () => this.restoreClubCore(engine, club, idMap)],
+                ['Secciones', () => this.restoreSections(engine, club, idMap)],
+                ['Miembros / hosts / permisos', () => this.restoreMembers(engine, dto.clubId, idMap)],
+                ['Muros / tareas / tabs', () => this.restoreSocial(engine, dto.clubId, idMap)],
+                ['Mini-juegos', () => this.restoreGames(engine, dto.clubId, idMap)],
+                ['Evaluaciones', () => this.restoreEvaluations(engine, dto.clubId, idMap)],
+                ['Contenidos', () => this.restoreContents(engine, dto.clubId, idMap)],
+                ['Videorooms', () => this.restoreVideorooms(engine, dto.clubId, idMap)],
+                ['Progreso de videorooms', () => this.restoreVideoroomProgress(engine, idMap)],
+                ['Intentos de juegos', () => this.restoreGameAttempts(engine, idMap)],
+                ['Datos de usuario (respuestas, comments...)', () => this.restoreUserData(engine, dto.clubId, idMap)],
+                ['Pivotes finales', () => this.restoreFinalPivots(engine, dto.clubId, idMap)],
+            ];
+
+            const total = phases.length;
+            for (let i = 0; i < total; i++) {
+                const [name, fn] = phases[i];
+                const pct = Math.round((i / total) * 100);
+                this.logger.log(`[club ${dto.clubId}] (${pct}%) ${i + 1}/${total} → ${name}...`);
+                const t0 = Date.now();
+                await fn();
+                const secs = ((Date.now() - t0) / 1000).toFixed(1);
+                const done = engine.rowsProcessed;
+                this.logger.log(
+                    `[club ${dto.clubId}] (${Math.round(((i + 1) / total) * 100)}%) ✓ ${name} — ${secs}s ` +
+                    `(acumulado: ${done} filas · insertadas=${engine.totalInserted} reusadas=${engine.totalReused} remapeadas=${engine.totalRemapped} saltadas=${engine.totalSkipped})`,
+                );
+            }
 
             if (dto.disableFkChecks) await qr.query('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -231,14 +288,24 @@ export class RestoresService {
             if (dryRun) {
                 await qr.rollbackTransaction();
                 report.warnings.push('DRY-RUN: transacción revertida, producción intacta.');
+                this.logger.log(
+                    `[club ${dto.clubId}] (100%) DRY-RUN completo — ${engine.rowsProcessed} filas simuladas ` +
+                    `(insertadas=${engine.totalInserted} reusadas=${engine.totalReused} remapeadas=${engine.totalRemapped} saltadas=${engine.totalSkipped}). Rollback OK.`,
+                );
             } else {
                 await qr.commitTransaction();
-                this.logger.log(`Club ${dto.clubId} restaurado → id ${report.newClubId}`);
+                this.logger.log(
+                    `[club ${dto.clubId}] (100%) ✔ RESTAURADO → nuevo id ${report.newClubId} — ${engine.rowsProcessed} filas ` +
+                    `(insertadas=${engine.totalInserted} reusadas=${engine.totalReused} remapeadas=${engine.totalRemapped} saltadas=${engine.totalSkipped})`,
+                );
             }
         } catch (err) {
             if (qr.isTransactionActive) await qr.rollbackTransaction();
             report.errors.push((err as Error).message);
-            this.logger.error(`Restore del club ${dto.clubId} fallido — rollback total`, (err as Error).stack);
+            this.logger.error(
+                `[club ${dto.clubId}] ✗ FALLÓ tras ${engine.rowsProcessed} filas — rollback total: ${(err as Error).message}`,
+                (err as Error).stack,
+            );
         } finally {
             report.finishedAt = new Date().toISOString();
             await qr.release();
@@ -263,14 +330,9 @@ export class RestoresService {
         const newId = await e.insertSmart('clubs', club);
         idMap.clubs.set(club.id, newId);
 
-        // Traducciones (la entity ClubTranslation ya existe en progress-users).
-        try {
-            const trs = await e.backup.query('SELECT * FROM `club_translations` WHERE club_id = ?', [club.id]);
-            for (const t of trs) {
-                await e.insertSmart('club_translations', { ...t, club_id: newId });
-            }
-        } catch {
-            e.report.warnings.push('club_translations: tabla no encontrada en backup (verificar nombre)');
+        // Traducciones del club (App\Translations\ClubTranslation: title, locale, club_id)
+        for (const t of await e.backup.query('SELECT * FROM `club_translations` WHERE club_id = ?', [club.id])) {
+            await e.insertSmart('club_translations', { ...t, club_id: newId });
         }
     }
 
@@ -378,6 +440,116 @@ export class RestoresService {
             idMap.tabs.set(tab.id, newTabId);
             for (const l of await e.backup.query('SELECT * FROM `lang_tabs` WHERE tabs_id = ?', [tab.id])) {
                 await e.insertSmart('lang_tabs', { ...l, tabs_id: newTabId });
+            }
+        }
+    }
+
+    // ── 4b. Mini-juegos del club (sopa de letras, crucigrama, drag&drop,
+    //        ahorcado, memoria, secuencias, completar frases) ─────────────────
+
+    private async restoreGames(e: CopyEngine, clubId: number, idMap: IdMap) {
+        const newClubId = idMap.clubs.get(clubId)!;
+
+        // Sopa de letras
+        for (const g of await e.backup.query('SELECT * FROM `alphabet_soups` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('alphabet_soups', g, 'user_id');
+            const newId = await e.insertSmart('alphabet_soups', { ...row, club_id: newClubId });
+            idMap.games.alphabetSoup.set(g.id, newId);
+        }
+
+        // Completar frases (⚠ FK de club es 'id_club', no 'club_id')
+        for (const g of await e.backup.query('SELECT * FROM `complete_sentences` WHERE id_club = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('complete_sentences', g, 'user_create');
+            const newId = await e.insertSmart('complete_sentences', { ...row, id_club: newClubId });
+            idMap.games.completeSentences.set(g.id, newId);
+        }
+
+        // Crucigrama + palabras/pistas
+        for (const g of await e.backup.query('SELECT * FROM `crosswords` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('crosswords', g, 'user_id');
+            const newId = await e.insertSmart('crosswords', { ...row, club_id: newClubId });
+            idMap.games.crossword.set(g.id, newId);
+            for (const w of await e.backup.query('SELECT * FROM `words_hints` WHERE crosswords_id = ?', [g.id])) {
+                await e.insertSmart('words_hints', { ...w, crosswords_id: newId });
+            }
+        }
+
+        // Arrastrar y soltar + pares palabra/imagen
+        for (const g of await e.backup.query('SELECT * FROM `drag_drops` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('drag_drops', g, 'user_id');
+            const newId = await e.insertSmart('drag_drops', { ...row, club_id: newClubId });
+            idMap.games.dragDrop.set(g.id, newId);
+            for (const w of await e.backup.query('SELECT * FROM `words__image__drag_drops` WHERE drag_drop_id = ?', [g.id])) {
+                await e.insertSmart('words__image__drag_drops', { ...w, drag_drop_id: newId });
+            }
+        }
+
+        // Ahorcado + frases/palabras
+        for (const g of await e.backup.query('SELECT * FROM `hanging_games` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('hanging_games', g, 'user_id');
+            const newId = await e.insertSmart('hanging_games', { ...row, club_id: newClubId });
+            idMap.games.hangingGame.set(g.id, newId);
+            for (const p of await e.backup.query('SELECT * FROM `phrases_words` WHERE hanging_id = ?', [g.id])) {
+                await e.insertSmart('phrases_words', { ...p, hanging_id: newId });
+            }
+        }
+
+        // Memoria
+        for (const g of await e.backup.query('SELECT * FROM `memory_games` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('memory_games', g, 'user_create');
+            const newId = await e.insertSmart('memory_games', { ...row, club_id: newClubId });
+            idMap.games.memoryGame.set(g.id, newId);
+        }
+
+        // Secuencia de tiempo + pasos
+        for (const g of await e.backup.query('SELECT * FROM `time_sequences` WHERE club_id = ?', [clubId])) {
+            const row = await e.nullifyMissingUser('time_sequences', g, 'user_id');
+            const newId = await e.insertSmart('time_sequences', { ...row, club_id: newClubId });
+            idMap.games.timeSequence.set(g.id, newId);
+            for (const s of await e.backup.query('SELECT * FROM `sequences` WHERE time_sequence_id = ?', [g.id])) {
+                await e.insertSmart('sequences', { ...s, time_sequence_id: newId });
+            }
+        }
+    }
+
+    /** Intentos de usuario en cada juego (tabla '*_users' / '*_history_users'). */
+    private async restoreGameAttempts(e: CopyEngine, idMap: IdMap) {
+        for (const [oldId, newId] of idMap.games.alphabetSoup.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `alphabet_soup_users` WHERE alhabet_soup_id = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('alphabet_soup_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('alphabet_soup_users', { ...row, alhabet_soup_id: newId });
+            }
+        }
+
+        for (const [oldId, newId] of idMap.games.completeSentences.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `complete_sentences_users` WHERE id_complete_sentences = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('complete_sentences_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('complete_sentences_users', { ...row, id_complete_sentences: newId });
+            }
+            for (const row of await e.backup.query('SELECT * FROM `complete_sentences_history_users` WHERE complete_sentences_id = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('complete_sentences_history_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('complete_sentences_history_users', { ...row, complete_sentences_id: newId });
+            }
+        }
+
+        for (const [oldId, newId] of idMap.games.hangingGame.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `hanging_game_users` WHERE hanging_game_id = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('hanging_game_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('hanging_game_users', { ...row, hanging_game_id: newId });
+            }
+        }
+
+        for (const [oldId, newId] of idMap.games.memoryGame.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `memory_game_users` WHERE id_memory_game = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('memory_game_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('memory_game_users', { ...row, id_memory_game: newId });
+            }
+        }
+
+        for (const [oldId, newId] of idMap.games.timeSequence.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `time_sequence_users` WHERE time_sequence_id = ?', [oldId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('time_sequence_users', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('time_sequence_users', { ...row, time_sequence_id: newId });
             }
         }
     }
@@ -536,7 +708,8 @@ export class RestoresService {
             // SCORM: columnas reales id_content / id_user
             for (const s of await e.backup.query('SELECT * FROM `scorms` WHERE id_content = ?', [c.id])) {
                 const sRow = await e.nullifyMissingUser('scorms', s, 'id_user');
-                await e.insertSmart('scorms', { ...sRow, id_content: newContentId });
+                const newScormId = await e.insertSmart('scorms', { ...sRow, id_content: newContentId });
+                idMap.scorms.set(s.id, newScormId);
             }
         }
     }
@@ -585,10 +758,19 @@ export class RestoresService {
                 });
             }
 
-            // ⚠ id_activities: el modelo de actividades/juegos aún no está mapeado;
-            // se copia la referencia tal cual (ver lista de pendientes).
             for (const d of await e.backup.query('SELECT * FROM `detail_video_room_activitaties` WHERE id_videoroom = ?', [vr.id])) {
-                await e.insertSmart('detail_video_room_activitaties', { ...d, id_videoroom: newVrId });
+                const gameKey = d.type ? GAME_TYPE_MAP[String(d.type).toLowerCase()] : undefined;
+                const newActivityId = gameKey
+                    ? idMap.games[gameKey].get(d.id_activities) ?? d.id_activities
+                    : d.id_activities;
+                if (!gameKey) {
+                    e.report.warnings.push(
+                        `detail_video_room_activitaties id=${d.id}: type="${d.type}" no reconocido en GAME_TYPE_MAP, id_activities copiado sin remapear`,
+                    );
+                }
+                await e.insertSmart('detail_video_room_activitaties', {
+                    ...d, id_videoroom: newVrId, id_activities: newActivityId,
+                });
             }
 
             for (const d of await e.backup.query('SELECT * FROM `detail_tasks_videorooms` WHERE videorooms_id = ?', [vr.id])) {
@@ -647,6 +829,80 @@ export class RestoresService {
             await e.insertSmart('detail_selft_evaluation_videorooms', {
                 ...d, id_videoroom: newVrId, selft_evaluations_id: newSeId,
             });
+        }
+    }
+
+    // ── 7b. Progreso de usuarios en videorooms (crítico: sin esto los alumnos
+    //        recuperan el curso pero pierden su avance) ────────────────────────
+
+    private async restoreVideoroomProgress(e: CopyEngine, idMap: IdMap) {
+        for (const [oldVrId, newVrId] of idMap.videorooms.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `general_pogress_video_rooms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('general_pogress_video_rooms', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('general_pogress_video_rooms', { ...row, id_videoroom: newVrId });
+            }
+
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_video_rooms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('user_pogress_video_rooms', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('user_pogress_video_rooms', {
+                    ...row,
+                    id_videoroom: newVrId,
+                    id_content: row.id_content != null ? idMap.contents.get(row.id_content) ?? row.id_content : null,
+                });
+            }
+
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_task_videorooms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('user_pogress_task_videorooms', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('user_pogress_task_videorooms', {
+                    ...row,
+                    id_videoroom: newVrId,
+                    id_task: row.id_task != null ? idMap.tasks.get(row.id_task) ?? row.id_task : null,
+                });
+            }
+
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_forum_videorooms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('user_pogress_forum_videorooms', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('user_pogress_forum_videorooms', {
+                    ...row,
+                    id_videoroom: newVrId,
+                    id_advertisements: row.id_advertisements != null
+                        ? idMap.advertisements.get(row.id_advertisements) ?? row.id_advertisements : null,
+                });
+            }
+
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_evaluation_video_rooms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('user_pogress_evaluation_video_rooms', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('user_pogress_evaluation_video_rooms', {
+                    ...row,
+                    id_videoroom: newVrId,
+                    id_evaluation: row.id_evaluation != null ? idMap.evaluations.get(row.id_evaluation) ?? row.id_evaluation : null,
+                });
+            }
+
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_selft_evaluation_videorroms` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.user_id))) { e.skip('user_pogress_selft_evaluation_videorroms', `user_id=${row.user_id} no existe`); continue; }
+                await e.insertSmart('user_pogress_selft_evaluation_videorroms', {
+                    ...row,
+                    id_videoroom: newVrId,
+                    selft_evaluations_id: idMap.selftEvaluations.get(row.selft_evaluations_id) ?? row.selft_evaluations_id,
+                });
+            }
+
+            // Actividades/juegos: remapear id_activity igual que en detail_video_room_activitaties
+            for (const row of await e.backup.query('SELECT * FROM `user_pogress_video_room_activities` WHERE id_videoroom = ?', [oldVrId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('user_pogress_video_room_activities', `id_user=${row.id_user} no existe`); continue; }
+                const gameKey = row.type ? GAME_TYPE_MAP[String(row.type).toLowerCase()] : undefined;
+                const newActivityId = gameKey ? idMap.games[gameKey].get(row.id_activity) ?? row.id_activity : row.id_activity;
+                await e.insertSmart('user_pogress_video_room_activities', { ...row, id_videoroom: newVrId, id_activity: newActivityId });
+            }
+        }
+
+        // Progreso de SCORM: keyed por id_scorm, no por videoroom
+        for (const [oldScormId, newScormId] of idMap.scorms.entries()) {
+            for (const row of await e.backup.query('SELECT * FROM `pogress_scorm_users` WHERE id_scorm = ?', [oldScormId])) {
+                if (!(await e.userExists(row.id_user))) { e.skip('pogress_scorm_users', `id_user=${row.id_user} no existe`); continue; }
+                await e.insertSmart('pogress_scorm_users', { ...row, id_scorm: newScormId });
+            }
         }
     }
 
@@ -828,12 +1084,17 @@ export class RestoresService {
     private emptyIdMap(): IdMap {
         return {
             clubs: new Map(), sections: new Map(), videorooms: new Map(),
-            contents: new Map(), evaluations: new Map(), questions: new Map(),
-            options: new Map(), additionalQuestions: new Map(),
+            contents: new Map(), scorms: new Map(), evaluations: new Map(),
+            questions: new Map(), options: new Map(), additionalQuestions: new Map(),
             additionalQuestionOptions: new Map(), images: new Map(),
             advertisements: new Map(), tasks: new Map(), tabs: new Map(),
             comments: new Map(), answerComments: new Map(),
             selftEvaluations: new Map(), questionsSelft: new Map(),
+            games: {
+                alphabetSoup: new Map(), completeSentences: new Map(),
+                crossword: new Map(), dragDrop: new Map(), hangingGame: new Map(),
+                memoryGame: new Map(), timeSequence: new Map(),
+            },
         };
     }
 }
@@ -844,17 +1105,39 @@ export class RestoresService {
 
 type LastAction = 'inserted' | 'remapped' | 'reused' | 'none';
 
+/**
+ * MySQL legacy (Laravel 5 + modo no estricto en su momento) suele tener
+ * fechas placeholder '0000-00-00' / '0000-00-00 00:00:00'. mysql2 con el
+ * sql_mode estricto de producción actual las rechaza en el INSERT
+ * ("Incorrect date value"). No representan una fecha real → se sanean:
+ * NULL si la columna lo permite, o 1970-01-01 si es NOT NULL (ver filterCols).
+ */
+interface ColMeta {
+    nullable: boolean;
+    dataType: string; // 'date' | 'datetime' | 'timestamp' | ...
+}
+
 class CopyEngine {
     /** Qué pasó con el último insertSmart/insertUuid (para decidir si copiar el subárbol). */
     lastAction: LastAction = 'none';
 
-    private prodColsCache = new Map<string, Set<string>>();
+    /** Contadores globales para el log de progreso por filas. */
+    rowsProcessed = 0;
+    totalInserted = 0;
+    totalReused = 0;
+    totalRemapped = 0;
+    totalSkipped = 0;
+
+    private readonly ROWS_LOG_EVERY = 100;
+    private prodColsCache = new Map<string, Map<string, ColMeta>>();
     private userCache = new Map<number, boolean>();
 
     constructor(
         readonly qr: QueryRunner,
         readonly backup: DataSource,
         readonly report: RestoreReport,
+        private readonly logger: Logger,
+        private readonly clubId: number,
     ) { }
 
     // ── Inserción principal (PK numérica autoincrement) ───────────────────────
@@ -941,10 +1224,22 @@ class CopyEngine {
 
     skip(table: string, reason: string) {
         this.report.skipped.push(`${table}: ${reason}`);
+        this.totalSkipped++;
     }
 
     bump(bucket: 'inserted' | 'remapped' | 'reused', table: string) {
         this.report[bucket][table] = (this.report[bucket][table] ?? 0) + 1;
+        this.rowsProcessed++;
+        if (bucket === 'inserted') this.totalInserted++;
+        else if (bucket === 'remapped') this.totalRemapped++;
+        else this.totalReused++;
+
+        if (this.rowsProcessed % this.ROWS_LOG_EVERY === 0) {
+            this.logger.log(
+                `[club ${this.clubId}]   ... ${this.rowsProcessed} filas procesadas ` +
+                `(insertadas=${this.totalInserted} reusadas=${this.totalReused} remapeadas=${this.totalRemapped} saltadas=${this.totalSkipped}) — última tabla: ${table}`,
+            );
+        }
     }
 
     // ── Internos ──────────────────────────────────────────────────────────────
@@ -967,21 +1262,45 @@ class CopyEngine {
         let cols = this.prodColsCache.get(table);
         if (!cols) {
             const rows = await this.qr.query(
-                `SELECT COLUMN_NAME cn FROM INFORMATION_SCHEMA.COLUMNS
+                `SELECT COLUMN_NAME cn, IS_NULLABLE nullable, DATA_TYPE dt
+         FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
                 [table],
             );
-            cols = new Set(rows.map((r: any) => r.cn));
+            cols = new Map(
+                rows.map((r: any) => [r.cn, { nullable: r.nullable === 'YES', dataType: r.dt }]),
+            );
             this.prodColsCache.set(table, cols);
         }
+
         const clean: Record<string, any> = {};
         const dropped: string[] = [];
+        let zeroDatesFound = false;
+
         for (const k of Object.keys(row)) {
-            if (cols.has(k)) clean[k] = row[k];
-            else dropped.push(k);
+            const meta = cols.get(k);
+            if (!meta) { dropped.push(k); continue; }
+
+            const isZeroDate = typeof row[k] === 'string' && /^0000-00-00/.test(row[k]);
+            if (!isZeroDate) { clean[k] = row[k]; continue; }
+
+            zeroDatesFound = true;
+            if (meta.nullable) {
+                clean[k] = null;
+            } else {
+                // NOT NULL → no se puede dejar en NULL; se usa un placeholder
+                // real y válido en vez de perder la fila entera.
+                clean[k] = meta.dataType === 'date' ? '1970-01-01' : '1970-01-01 00:00:00';
+            }
         }
+
         if (dropped.length && !this.report.droppedColumns[table]) {
             this.report.droppedColumns[table] = dropped;
+        }
+        if (zeroDatesFound) {
+            this.report.warnings.push(
+                `${table}: fecha inválida '0000-00-00...' saneada (NULL si la columna lo permite, 1970-01-01 si es NOT NULL)`,
+            );
         }
         return clean;
     }
