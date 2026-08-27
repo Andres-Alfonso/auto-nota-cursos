@@ -26,6 +26,33 @@ export class RestoresController {
     }
 
     /**
+     * Trae SOLO los usuarios únicos de club_user (backup) que falten en
+     * producción. No toca ids ocupados por otra persona (email distinto) —
+     * esos quedan en `conflicts` para revisión manual. dryRun por default.
+     */
+    @Post('clubs/:id/users')
+    restoreUsers(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: RestoreClubDto,
+    ) {
+        return this.restoresService.restoreClubUsers({ ...dto, clubId: id });
+    }
+
+    /**
+     * Matricula (club_user) a los alumnos del backup en un club que YA EXISTE
+     * en producción (no lo crea ni lo remapea). Deduplica por user_id
+     * priorizando la fila con fecha real; salta usuarios sin cuenta en
+     * producción — corre /users primero si hace falta. dryRun por default.
+     */
+    @Post('clubs/:id/memberships')
+    restoreMemberships(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: RestoreClubDto,
+    ) {
+        return this.restoresService.restoreClubMemberships({ ...dto, clubId: id });
+    }
+
+    /**
      * Restaura el club. Sin body (o dryRun:true) → simulación con rollback.
      * El run real exige { dryRun: false, confirm: true }.
      */

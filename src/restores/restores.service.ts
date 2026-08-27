@@ -99,6 +99,45 @@ const GAME_TYPE_MAP: Record<string, keyof IdMap['games']> = {
     time_sequences: 'timeSequence',
 };
 
+/** Reporte del restore de usuarios de un club (endpoint independiente). */
+export interface ClubUsersRestoreReport {
+    dryRun: boolean;
+    clubId: number;
+    /** user_id únicos encontrados en club_user (backup) para este club. */
+    totalUsersInClub: number;
+    /** ids que no existían en producción y se insertaron con su id original. */
+    inserted: number[];
+    /** ids que ya existían en producción y son la misma persona (email coincide). */
+    reused: number[];
+    /** ids ocupados en producción por OTRA persona — no se tocaron. */
+    conflicts: Array<{ id: number; prodEmail: string | null; backupEmail: string | null }>;
+    warnings: string[];
+    errors: string[];
+    startedAt: string;
+    finishedAt: string | null;
+}
+
+/** Reporte del restore de matrículas (club_user) de un club existente. */
+export interface ClubMembershipsRestoreReport {
+    dryRun: boolean;
+    clubId: number;
+    /** filas crudas de club_user en el backup para este club (con duplicados). */
+    totalRowsInBackup: number;
+    /** usuarios únicos tras deduplicar (prioridad: fila con fecha real). */
+    uniqueUsers: number;
+    duplicatesDropped: number;
+    /** user_id que se matricularon (INSERT nuevo en club_user de producción). */
+    inserted: number[];
+    /** user_id que ya estaban matriculados en producción. */
+    reused: number[];
+    /** user_id de club_user (backup) que no tienen cuenta en `users` de producción. */
+    skippedMissingUser: number[];
+    warnings: string[];
+    errors: string[];
+    startedAt: string;
+    finishedAt: string | null;
+}
+
 export interface RestoreReport {
     dryRun: boolean;
     clubId: number;
@@ -131,13 +170,37 @@ export class RestoresService {
     // ── Conexión dinámica al backup ───────────────────────────────────────────
 
     private async buildBackupDataSource(dto: RestoreClubDto): Promise<DataSource> {
-        const ds = new DataSource({
-            type: 'mysql',
+        const backupOpts = {
             host: dto.backupHost ?? this.config.get('BACKUP_DB_HOST', '127.0.0.1'),
             port: dto.backupPort ?? +this.config.get('BACKUP_DB_PORT', '3306'),
             username: dto.backupUser ?? this.config.get('BACKUP_DB_USER', 'root'),
             password: dto.backupPassword ?? this.config.get('BACKUP_DB_PASSWORD', ''),
             database: dto.backupDatabase ?? this.config.get('BACKUP_DB_NAME', 'lms_backup'),
+        };
+
+        // Guardia crítica: si el backup termina apuntando a la MISMA base que
+        // producción (credenciales mal puestas en .env, o body sin override),
+        // todo "funciona" pero cada fila se compara consigo misma → 100% reused,
+        // 0% insertado, sin ningún error visible. Se corta acá, rápido y claro,
+        // en vez de dejar correr todo el proceso para un resultado engañoso.
+        const prodOpts: any = this.prodDs.options;
+        const samesDb =
+            String(backupOpts.host) === String(prodOpts.host) &&
+            Number(backupOpts.port) === Number(prodOpts.port ?? 3306) &&
+            String(backupOpts.database) === String(prodOpts.database);
+        if (samesDb) {
+            throw new BadRequestException(
+                `El backup apunta a la MISMA base de datos que producción ` +
+                `(host=${backupOpts.host} db=${backupOpts.database}). Revisa BACKUP_DB_HOST/BACKUP_DB_NAME ` +
+                `en el .env, o manda backupHost/backupDatabase en el body — no se está leyendo el backup real.`,
+            );
+        }
+
+        this.logger.log(`Backup: conectando a ${backupOpts.host}:${backupOpts.port}/${backupOpts.database}...`);
+
+        const ds = new DataSource({
+            type: 'mysql',
+            ...backupOpts,
             synchronize: false,
             // Fechas como string 'YYYY-MM-DD HH:mm:ss' → se re-insertan idénticas,
             // sin corrimientos de timezone del driver.
@@ -188,6 +251,288 @@ export class RestoresService {
         } finally {
             await backup.destroy();
         }
+    }
+
+    // ── Usuarios únicos de un club (club_user) → producción ────────────────────
+    //
+    // Endpoint independiente del restore completo: dado SOLO un clubId, saca
+    // los user_id únicos de `club_user` en el backup y trae a producción los
+    // que falten. A propósito NO reutiliza CopyEngine.insertSmart: para una
+    // tabla de identidad como `users`, si el id ya está ocupado por OTRA
+    // persona (email distinto), la respuesta correcta no es "insertar con un
+    // id nuevo" (crearía una cuenta duplicada) — es reportar el conflicto y
+    // no tocar nada, para revisión manual.
+
+    async restoreClubUsers(dto: RestoreClubDto): Promise<ClubUsersRestoreReport> {
+        const dryRun = dto.dryRun !== false;
+        if (!dryRun && dto.confirm !== true) {
+            throw new BadRequestException(
+                'Run real requiere { dryRun: false, confirm: true }. Ejecuta primero el dry-run.',
+            );
+        }
+
+        const report: ClubUsersRestoreReport = {
+            dryRun,
+            clubId: dto.clubId,
+            totalUsersInClub: 0,
+            inserted: [],
+            reused: [],
+            conflicts: [],
+            warnings: [],
+            errors: [],
+            startedAt: new Date().toISOString(),
+            finishedAt: null,
+        };
+
+        this.logger.log(`[club ${dto.clubId}] usuarios: conectando al backup...`);
+        const backup = await this.buildBackupDataSource(dto);
+        const qr = this.prodDs.createQueryRunner();
+        await qr.connect();
+
+        try {
+            // DISTINCT: aquí es donde salen los "datos únicos" — un mismo usuario
+            // puede aparecer varias veces si tuvo más de una fila en club_user.
+            const rows = await backup.query(
+                'SELECT DISTINCT user_id FROM `club_user` WHERE club_id = ?', [dto.clubId],
+            );
+            const userIds: number[] = rows.map((r: any) => r.user_id).filter((id: any) => id != null);
+            report.totalUsersInClub = userIds.length;
+
+            if (userIds.length === 0) {
+                report.warnings.push(`No hay filas en club_user para el club ${dto.clubId} en el backup.`);
+            } else {
+                const colsMeta = await fetchColumnsMeta(qr, 'users');
+                const hasEmailCol = colsMeta.has('email');
+                if (!hasEmailCol) {
+                    report.warnings.push(
+                        `La tabla 'users' de producción no tiene columna 'email' — no se puede verificar identidad ` +
+                        `en caso de colisión de id; cualquier id ya ocupado se asumirá como el mismo usuario.`,
+                    );
+                }
+
+                await qr.startTransaction();
+
+                let processed = 0;
+                for (const userId of userIds) {
+                    const [backupUser] = await backup.query('SELECT * FROM `users` WHERE id = ? LIMIT 1', [userId]);
+                    if (!backupUser) {
+                        report.warnings.push(
+                            `user_id=${userId}: está en club_user del backup pero no existe en \`users\` del backup (dato ya inconsistente en el backup).`,
+                        );
+                        continue;
+                    }
+
+                    const [prodUser] = await qr.query('SELECT * FROM `users` WHERE id = ? LIMIT 1', [userId]);
+
+                    if (!prodUser) {
+                        const { clean } = sanitizeRowAgainstSchema(backupUser, colsMeta);
+                        const cols = Object.keys(clean).filter((k) => clean[k] !== undefined);
+                        await qr.query(
+                            `INSERT INTO \`users\` (${cols.map((c) => `\`${c}\``).join(', ')})
+               VALUES (${cols.map(() => '?').join(', ')})`,
+                            cols.map((c) => clean[c]),
+                        );
+                        report.inserted.push(userId);
+                    } else if (!hasEmailCol) {
+                        report.reused.push(userId);
+                    } else {
+                        const sameEmail =
+                            String(prodUser.email ?? '').trim().toLowerCase() ===
+                            String(backupUser.email ?? '').trim().toLowerCase();
+                        if (sameEmail) {
+                            report.reused.push(userId);
+                        } else {
+                            // Id ocupado por otra persona → NO tocar, reportar.
+                            report.conflicts.push({
+                                id: userId,
+                                prodEmail: prodUser.email ?? null,
+                                backupEmail: backupUser.email ?? null,
+                            });
+                        }
+                    }
+
+                    processed++;
+                    if (processed % 50 === 0) {
+                        this.logger.log(
+                            `[club ${dto.clubId}] usuarios: ${processed}/${userIds.length} procesados ` +
+                            `(insertados=${report.inserted.length} reusados=${report.reused.length} conflictos=${report.conflicts.length})`,
+                        );
+                    }
+                }
+
+                if (report.conflicts.length) {
+                    report.warnings.push(
+                        `${report.conflicts.length} id(s) de usuario están ocupados en producción por una persona ` +
+                        `DIFERENTE (email distinto) — no se tocaron, requieren revisión manual.`,
+                    );
+                }
+
+                if (dryRun) {
+                    await qr.rollbackTransaction();
+                    report.warnings.push('DRY-RUN: transacción revertida, producción intacta.');
+                } else {
+                    await qr.commitTransaction();
+                }
+
+                this.logger.log(
+                    `[club ${dto.clubId}] usuarios: ${dryRun ? 'DRY-RUN completo' : 'RESTAURADO'} — ` +
+                    `${report.inserted.length} insertados, ${report.reused.length} ya existían, ${report.conflicts.length} conflictos.`,
+                );
+            }
+        } catch (err) {
+            if (qr.isTransactionActive) await qr.rollbackTransaction();
+            report.errors.push((err as Error).message);
+            this.logger.error(`[club ${dto.clubId}] usuarios: falló — rollback total`, (err as Error).stack);
+        } finally {
+            report.finishedAt = new Date().toISOString();
+            await qr.release();
+            await backup.destroy();
+        }
+
+        return report;
+    }
+
+    // ── Matrículas (club_user) de un club QUE YA EXISTE en producción ──────────
+    //
+    // Distinto de restoreClubUsers: ese trae las CUENTAS de usuario (tabla
+    // `users`). Este trae las MATRÍCULAS (tabla `club_user`) — útil cuando el
+    // club en sí no está borrado (o ya se restauró) pero le faltan alumnos
+    // inscritos. Dado SOLO el clubId (el mismo id en backup y producción, no
+    // hay remapeo), dedupe por user_id priorizando la fila con fecha real
+    // (mismo criterio que restoreMembers en el restore completo), y por cada
+    // usuario único: si no tiene cuenta en producción se salta y se reporta;
+    // si ya está matriculado (existe la pareja club_id+user_id) se reusa; si
+    // no, se inserta SIN forzar el id del backup — club_user.id es autoincrement
+    // y nada más lo referencia como FK, así que dejar que MySQL genere uno
+    // nuevo es más seguro que arriesgar una colisión con otra matrícula ajena.
+
+    async restoreClubMemberships(dto: RestoreClubDto): Promise<ClubMembershipsRestoreReport> {
+        const dryRun = dto.dryRun !== false;
+        if (!dryRun && dto.confirm !== true) {
+            throw new BadRequestException(
+                'Run real requiere { dryRun: false, confirm: true }. Ejecuta primero el dry-run.',
+            );
+        }
+
+        const report: ClubMembershipsRestoreReport = {
+            dryRun,
+            clubId: dto.clubId,
+            totalRowsInBackup: 0,
+            uniqueUsers: 0,
+            duplicatesDropped: 0,
+            inserted: [],
+            reused: [],
+            skippedMissingUser: [],
+            warnings: [],
+            errors: [],
+            startedAt: new Date().toISOString(),
+            finishedAt: null,
+        };
+
+        this.logger.log(`[club ${dto.clubId}] matrículas: conectando al backup...`);
+        const backup = await this.buildBackupDataSource(dto);
+        const qr = this.prodDs.createQueryRunner();
+        await qr.connect();
+
+        try {
+            const [prodClub] = await qr.query('SELECT id FROM `clubs` WHERE id = ? LIMIT 1', [dto.clubId]);
+            if (!prodClub) {
+                report.warnings.push(
+                    `El club ${dto.clubId} NO existe en producción — usa /restores/clubs/${dto.clubId} (restore completo) en vez de este endpoint.`,
+                );
+            } else {
+                const rawRows = await backup.query('SELECT * FROM `club_user` WHERE club_id = ?', [dto.clubId]);
+                report.totalRowsInBackup = rawRows.length;
+
+                // Dedup: prioridad a la fila con created_at/updated_at real.
+                const bestByUserId = new Map<number, any>();
+                for (const cu of rawRows) {
+                    const current = bestByUserId.get(cu.user_id);
+                    if (!current || (hasValidDate(cu) && !hasValidDate(current))) {
+                        bestByUserId.set(cu.user_id, cu);
+                    }
+                }
+                report.uniqueUsers = bestByUserId.size;
+                report.duplicatesDropped = rawRows.length - bestByUserId.size;
+
+                const colsMeta = await fetchColumnsMeta(qr, 'club_user');
+
+                await qr.startTransaction();
+
+                let processed = 0;
+                for (const cu of bestByUserId.values()) {
+                    const [prodUserExists] = await qr.query('SELECT id FROM `users` WHERE id = ? LIMIT 1', [cu.user_id]);
+                    if (!prodUserExists) {
+                        report.skippedMissingUser.push(cu.user_id);
+                        processed++;
+                        continue;
+                    }
+
+                    const [existingMembership] = await qr.query(
+                        'SELECT id FROM `club_user` WHERE club_id = ? AND user_id = ? LIMIT 1',
+                        [dto.clubId, cu.user_id],
+                    );
+
+                    if (existingMembership) {
+                        report.reused.push(cu.user_id);
+                    } else {
+                        const { clean } = sanitizeRowAgainstSchema(cu, colsMeta);
+                        delete clean.id; // dejar que MySQL genere el id, no forzar el del backup
+                        clean.club_id = dto.clubId;
+                        clean.user_id = cu.user_id;
+                        const cols = Object.keys(clean).filter((k) => clean[k] !== undefined);
+                        await qr.query(
+                            `INSERT INTO \`club_user\` (${cols.map((c) => `\`${c}\``).join(', ')})
+               VALUES (${cols.map(() => '?').join(', ')})`,
+                            cols.map((c) => clean[c]),
+                        );
+                        report.inserted.push(cu.user_id);
+                    }
+
+                    processed++;
+                    if (processed % 200 === 0) {
+                        this.logger.log(
+                            `[club ${dto.clubId}] matrículas: ${processed}/${report.uniqueUsers} procesados ` +
+                            `(insertados=${report.inserted.length} reusados=${report.reused.length} sin-cuenta=${report.skippedMissingUser.length})`,
+                        );
+                    }
+                }
+
+                if (report.skippedMissingUser.length) {
+                    report.warnings.push(
+                        `${report.skippedMissingUser.length} usuario(s) de club_user (backup) no tienen cuenta en producción — ` +
+                        `corre /restores/clubs/${dto.clubId}/users primero para traer esas cuentas, luego repite este endpoint.`,
+                    );
+                }
+                if (report.duplicatesDropped > 0) {
+                    report.warnings.push(
+                        `${report.duplicatesDropped} fila(s) duplicada(s) por user_id en club_user (backup) — se usó la copia con fecha real.`,
+                    );
+                }
+
+                if (dryRun) {
+                    await qr.rollbackTransaction();
+                    report.warnings.push('DRY-RUN: transacción revertida, producción intacta.');
+                } else {
+                    await qr.commitTransaction();
+                }
+
+                this.logger.log(
+                    `[club ${dto.clubId}] matrículas: ${dryRun ? 'DRY-RUN completo' : 'RESTAURADO'} — ` +
+                    `${report.inserted.length} matriculados, ${report.reused.length} ya estaban, ${report.skippedMissingUser.length} sin cuenta.`,
+                );
+            }
+        } catch (err) {
+            if (qr.isTransactionActive) await qr.rollbackTransaction();
+            report.errors.push((err as Error).message);
+            this.logger.error(`[club ${dto.clubId}] matrículas: falló — rollback total`, (err as Error).stack);
+        } finally {
+            report.finishedAt = new Date().toISOString();
+            await qr.release();
+            await backup.destroy();
+        }
+
+        return report;
     }
 
     // ── Entry-point principal ─────────────────────────────────────────────────
@@ -380,7 +725,26 @@ export class RestoresService {
     private async restoreMembers(e: CopyEngine, clubId: number, idMap: IdMap) {
         const newClubId = idMap.clubs.get(clubId)!;
 
-        for (const cu of await e.backup.query('SELECT * FROM `club_user` WHERE club_id = ?', [clubId])) {
+        // club_user puede tener filas duplicadas por user_id (mismo alumno
+        // varias veces en el pivote). Prioridad: la fila con created_at/updated_at
+        // válido gana sobre la que tiene NULL/vacío/'0000-00-00'; si NINGUNA de
+        // las copias de un usuario tiene fecha, se usa igual (no se pierde al
+        // alumno) — solo se descarta el duplicado que perdió la comparación.
+        const clubUserRows = await e.backup.query('SELECT * FROM `club_user` WHERE club_id = ?', [clubId]);
+        const bestClubUserByUserId = new Map<number, any>();
+        for (const cu of clubUserRows) {
+            const current = bestClubUserByUserId.get(cu.user_id);
+            if (!current || (hasValidDate(cu) && !hasValidDate(current))) {
+                bestClubUserByUserId.set(cu.user_id, cu);
+            }
+        }
+        if (clubUserRows.length > bestClubUserByUserId.size) {
+            e.report.warnings.push(
+                `club_user: ${clubUserRows.length - bestClubUserByUserId.size} fila(s) duplicada(s) por user_id descartadas ` +
+                `(se priorizó la copia con fecha real sobre la de fecha NULL/vacía).`,
+            );
+        }
+        for (const cu of bestClubUserByUserId.values()) {
             if (!(await e.userExists(cu.user_id))) { e.skip('club_user', `user_id=${cu.user_id} no existe`); continue; }
             await e.insertSmart('club_user', { ...cu, club_id: newClubId });
         }
@@ -1112,9 +1476,53 @@ type LastAction = 'inserted' | 'remapped' | 'reused' | 'none';
  * ("Incorrect date value"). No representan una fecha real → se sanean:
  * NULL si la columna lo permite, o 1970-01-01 si es NOT NULL (ver filterCols).
  */
+/** ¿La fila tiene una fecha real en created_at/updated_at (no NULL, no '', no '0000-00-00...')? */
+function hasValidDate(row: Record<string, any>): boolean {
+    const isValid = (v: any) => v != null && v !== '' && !/^0000-00-00/.test(String(v));
+    return isValid(row.created_at) || isValid(row.updated_at);
+}
+
 interface ColMeta {
     nullable: boolean;
     dataType: string; // 'date' | 'datetime' | 'timestamp' | ...
+}
+
+/** Trae metadata real de columnas de producción (nombre, nullable, tipo). */
+async function fetchColumnsMeta(qr: QueryRunner, table: string): Promise<Map<string, ColMeta>> {
+    const rows = await qr.query(
+        `SELECT COLUMN_NAME cn, IS_NULLABLE nullable, DATA_TYPE dt
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+        [table],
+    );
+    return new Map(rows.map((r: any) => [r.cn, { nullable: r.nullable === 'YES', dataType: r.dt }]));
+}
+
+/**
+ * Filtra una fila del backup contra las columnas reales de producción y
+ * sanea fechas basura '0000-00-00...': NULL si la columna lo permite,
+ * placeholder válido (1970-01-01) si es NOT NULL.
+ */
+function sanitizeRowAgainstSchema(
+    row: Record<string, any>,
+    colsMeta: Map<string, ColMeta>,
+): { clean: Record<string, any>; dropped: string[]; hadZeroDate: boolean } {
+    const clean: Record<string, any> = {};
+    const dropped: string[] = [];
+    let hadZeroDate = false;
+
+    for (const k of Object.keys(row)) {
+        const meta = colsMeta.get(k);
+        if (!meta) { dropped.push(k); continue; }
+
+        const isZeroDate = typeof row[k] === 'string' && /^0000-00-00/.test(row[k]);
+        if (!isZeroDate) { clean[k] = row[k]; continue; }
+
+        hadZeroDate = true;
+        clean[k] = meta.nullable ? null : (meta.dataType === 'date' ? '1970-01-01' : '1970-01-01 00:00:00');
+    }
+
+    return { clean, dropped, hadZeroDate };
 }
 
 class CopyEngine {
@@ -1261,43 +1669,16 @@ class CopyEngine {
     private async filterCols(table: string, row: Record<string, any>): Promise<Record<string, any>> {
         let cols = this.prodColsCache.get(table);
         if (!cols) {
-            const rows = await this.qr.query(
-                `SELECT COLUMN_NAME cn, IS_NULLABLE nullable, DATA_TYPE dt
-         FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-                [table],
-            );
-            cols = new Map(
-                rows.map((r: any) => [r.cn, { nullable: r.nullable === 'YES', dataType: r.dt }]),
-            );
+            cols = await fetchColumnsMeta(this.qr, table);
             this.prodColsCache.set(table, cols);
         }
 
-        const clean: Record<string, any> = {};
-        const dropped: string[] = [];
-        let zeroDatesFound = false;
-
-        for (const k of Object.keys(row)) {
-            const meta = cols.get(k);
-            if (!meta) { dropped.push(k); continue; }
-
-            const isZeroDate = typeof row[k] === 'string' && /^0000-00-00/.test(row[k]);
-            if (!isZeroDate) { clean[k] = row[k]; continue; }
-
-            zeroDatesFound = true;
-            if (meta.nullable) {
-                clean[k] = null;
-            } else {
-                // NOT NULL → no se puede dejar en NULL; se usa un placeholder
-                // real y válido en vez de perder la fila entera.
-                clean[k] = meta.dataType === 'date' ? '1970-01-01' : '1970-01-01 00:00:00';
-            }
-        }
+        const { clean, dropped, hadZeroDate } = sanitizeRowAgainstSchema(row, cols);
 
         if (dropped.length && !this.report.droppedColumns[table]) {
             this.report.droppedColumns[table] = dropped;
         }
-        if (zeroDatesFound) {
+        if (hadZeroDate) {
             this.report.warnings.push(
                 `${table}: fecha inválida '0000-00-00...' saneada (NULL si la columna lo permite, 1970-01-01 si es NOT NULL)`,
             );
