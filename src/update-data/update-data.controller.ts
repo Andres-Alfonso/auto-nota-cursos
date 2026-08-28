@@ -949,7 +949,10 @@ export class UpdateDataController {
             await this.processUserCustomFields(user, row, client.customFields, manager);
             
             // Asociar club
-            await this.attachUserToClub(user.id, clubId, manager);
+           // Asociar club (y saber si la inscripción fue nueva)
+            const wasNewEnrollment = await this.attachUserToClub(user.id, clubId, manager);
+
+
             
             // Asociar a clubes públicos
             // await this.attachPublicClubs(user.id, manager);
@@ -960,7 +963,7 @@ export class UpdateDataController {
             }
           });
           
-          return { success: true, error: null, user: user };
+          return { success: true, error: null, user: user, wasNewEnrollment };
         } catch (transactionError) {
           console.error(`Error en transacción de usuario: ${transactionError.message}`);
           return { success: false, error: `Error en transacción: ${transactionError.message}`, user: null };
@@ -1018,12 +1021,14 @@ export class UpdateDataController {
     `, [userId, customFieldId, value]);
   }
 
-  private async attachUserToClub(userId: number, clubId: number, manager: any) {
-    await manager.query(`
-      INSERT IGNORE INTO club_user (user_id, club_id) 
-      VALUES (?, ?)
-    `, [userId, clubId]);
-  }
+  private async attachUserToClub(userId: number, clubId: number, manager: any): Promise<boolean> {
+  const result = await manager.query(`
+    INSERT IGNORE INTO club_user (user_id, club_id) 
+    VALUES (?, ?)
+  `, [userId, clubId]);
+  // MySQL: affectedRows = 1 si insertó, 0 si el duplicado fue ignorado
+  return result?.affectedRows === 1;
+}
 
   // private async attachPublicClubs(userId: number, manager: any) {
   //   // Obtener clubes públicos y asociarlos al usuario
