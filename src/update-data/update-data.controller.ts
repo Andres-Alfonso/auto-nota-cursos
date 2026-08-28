@@ -41,6 +41,14 @@ interface ProcessResult {
   message: string;
 }
 
+interface ProcessRowResult {
+  success: boolean;
+  error: string | null;
+  user: any;
+  wasNewEnrollment?: boolean; // opcional: solo aparece en el retorno de éxito
+}
+
+
 @Controller('update-data')
 export class UpdateDataController {
   constructor(
@@ -511,8 +519,12 @@ export class UpdateDataController {
     try {
       let totalRows = 0;
       
+      // ── Acumuladores para el correo (en memoria, dentro de esta misma petición) ──
+      const recipientsMap = new Map<number, { id: number; name: string; email: string }>();
+      const newlyEnrolledCourses = new Set<string>();
+
       // Obtener cliente una sola vez para eficiencia
-      const client = await this.clientRepository.findOne({ 
+      const client = await this.clientRepository.findOne({
         where: { id: clientId },
         relations: ['customFields', 'customFields.options']
       });
@@ -520,7 +532,7 @@ export class UpdateDataController {
       if (!client) {
         throw new BadRequestException('Cliente no encontrado');
       }
-      
+
       // Procesar para cada club
       for (const clubId of clubIds) {
         const club = await this.clubRepository.findOne({ where: { id: clubId } });
@@ -528,6 +540,7 @@ export class UpdateDataController {
           console.warn(`Club ID ${clubId} not found during import`);
           continue;
         }
+        
         
         // Procesar archivo Excel inmediatamente
         const rowsProcessed = await this.processExcelFile(
@@ -537,22 +550,38 @@ export class UpdateDataController {
           importDto.section_id ?? 0,
           userId,
           roleUser,
-          client
-        );
-        
-        totalRows += rowsProcessed;
-      }
+          client,
+          // ↓ callback para capturar cada inscripción nueva sin ensuciar processExcelFile
+          (user: any) => {
+            newlyEnrolledCourses.add(club.title);
+            if (!recipientsMap.has(user.id)) {
+              recipientsMap.set(user.id, {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+            });
+            }
+          }
+        ); 
+
+  totalRows += rowsProcessed;
+}
+
+const recipients = Array.from(recipientsMap.values());
+const courses = Array.from(newlyEnrolledCourses);
+
+return {
+  success: true,
+  message: `Importación completada con éxito. Total de filas procesadas: ${totalRows}`,
+  totalRows,
+  recipients, // 
+  courses,    //
+};
       
-      return {
-        success: true,
-        message: `Importación completada con éxito. Total de filas procesadas: ${totalRows}`,
-        totalRows,
-      };
     } catch (error) {
       throw new InternalServerErrorException(`Importación fallida: ${error.message}`);
     }
   }
-
 
   // Método para obtener clubes por filtro
   private async getClubsByFilterValue(filterId: number, filterValue: string): Promise<number[]> {
@@ -574,7 +603,8 @@ export class UpdateDataController {
     sectionId: number,
     userId: number,
     roleUser: number,
-    client: any
+    client: any,
+    onNewEnrollment?: (user: any) => void, 
   ): Promise<number> {
     try {
       const workbook = xlsx.readFile(file.path);
@@ -597,6 +627,11 @@ export class UpdateDataController {
           if (result.success) {
             console.log(`Fila ${rowIndex + 1}: Usuario procesado exitosamente - ${result.user?.email || result.user?.identification}`);
             successCount++;
+
+            // Solo si esta fila generó una inscripción NUEVA en este club
+            if (result.wasNewEnrollment && result.user && onNewEnrollment) {
+              onNewEnrollment(result.user);
+            }
           } else {
             console.error(`Fila ${rowIndex + 1}: ${result.error}`);
             errorCount++;
@@ -644,7 +679,8 @@ export class UpdateDataController {
     userId: number,
     roleUser: number,
     client: any
-  ) {
+  ): Promise<ProcessRowResult> {
+
     try {
       // Verificar si la fila tiene datos importantes
       const normalizeKey = (key: string) =>
@@ -918,6 +954,8 @@ export class UpdateDataController {
       
       if (Object.keys(updateData).length > 0 || correo || numeroDocumento) {
         try {
+          let wasNewEnrollment = false;
+
           await this.dataSource.transaction(async manager => {
             let wasRecentlyCreated = false;
             
@@ -950,10 +988,8 @@ export class UpdateDataController {
             
             // Asociar club
            // Asociar club (y saber si la inscripción fue nueva)
-            const wasNewEnrollment = await this.attachUserToClub(user.id, clubId, manager);
+            wasNewEnrollment = await this.attachUserToClub(user.id, clubId, manager);
 
-
-            
             // Asociar a clubes públicos
             // await this.attachPublicClubs(user.id, manager);
             
