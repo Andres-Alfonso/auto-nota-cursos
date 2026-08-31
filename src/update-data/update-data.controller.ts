@@ -582,7 +582,7 @@ return {
       throw new InternalServerErrorException(`Importación fallida: ${error.message}`);
     }
   }
-
+  
   // Método para obtener clubes por filtro
   private async getClubsByFilterValue(filterId: number, filterValue: string): Promise<number[]> {
     // Implementar lógica para obtener clubes basado en filtro
@@ -1038,7 +1038,11 @@ return {
             break;
             
           case 'text':
+            await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
+            break;
           case 'textarea':
+            await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
+            break;
           default:
             if (fieldValue) {
               await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
