@@ -553,7 +553,7 @@ export class UpdateDataController {
           client,
           // ↓ callback para capturar cada inscripción nueva sin ensuciar processExcelFile
           (user: any) => {
-            newlyEnrolledCourses.add(club.title);
+            newlyEnrolledCourses.add(club.name);
             if (!recipientsMap.has(user.id)) {
               recipientsMap.set(user.id, {
                 id: user.id,
