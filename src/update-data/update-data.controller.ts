@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UploadedFile, UseInterceptors, ParseIntPipe, HttpStatus, HttpException, Req, BadRequestException, InternalServerErrorException, UploadedFiles } from '@nestjs/common';
+import { Controller, Post, Body, UploadedFile, UseInterceptors, ParseIntPipe, HttpStatus, HttpException, Req, BadRequestException, InternalServerErrorException, UploadedFiles, UsePipes, ValidationPipe } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { UpdateDataService } from './services/update-data.service';
@@ -15,6 +15,7 @@ import { ImportUsersDto } from 'src/progress-users/dto/upload-import.dto';
 import { Client } from 'src/reports_v2/entities/client.entity';
 import { UpdateEvaluationProgressDto } from './dto/update-evaluation-progress.dro';
 import { UploadUsersClubsDto } from './dto/upload-users-clubs.dto';
+import { MailserverService } from '../mailserver/mailserver.service';
 
 interface UserData {
   cedula?: string;
@@ -48,6 +49,14 @@ interface ProcessRowResult {
   wasNewEnrollment?: boolean; // opcional: solo aparece en el retorno de éxito
 }
 
+interface NotificationResult {
+  userId: number;
+  email: string;
+  status: 'queued' | 'failed';
+  jobId?: string;
+  error?: string;
+}
+
 
 @Controller('update-data')
 export class UpdateDataController {
@@ -66,6 +75,7 @@ export class UpdateDataController {
     private clientRepository: Repository<Client>,
 
     private dataSource: DataSource,
+    private readonly mailserverService: MailserverService,
   ) {}
 
   @Post('upload')
@@ -458,17 +468,22 @@ export class UpdateDataController {
   // Controlador actualizado
   @Post('upload/import')
   @UseInterceptors(FileInterceptor('file'))
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false }))
   async importUsers(
     @UploadedFile() file: Multer.File,
     @Body() importDto: ImportUsersDto,
   ) {
+    console.log('MIME recibido:', file?.mimetype, '| nombre:', file?.originalname); // ← temporal
+
+    console.log('Import DTO recibido:', importDto);
+
     // Validación del archivo
     if (!file) {
       throw new BadRequestException('Se requiere un archivo');
     }
 
     const allowedMimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
-                        'application/vnd.ms-excel', 'text/csv'];
+                        'application/vnd.ms-excel', 'text/csv', 'application/octet-stream' ];
     if (!allowedMimes.includes(file.mimetype)) {
       throw new BadRequestException('Formato de archivo no permitido. Use XLSX, XLS o CSV');
     }
@@ -520,7 +535,10 @@ export class UpdateDataController {
       let totalRows = 0;
       
       // ── Acumuladores para el correo (en memoria, dentro de esta misma petición) ──
-      const recipientsMap = new Map<number, { id: number; name: string; email: string }>();
+      const recipientsMap = new Map<
+        number,
+        { id: number; name: string; email: string; addedGroups: Set<string> }
+      >();
       const newlyEnrolledCourses = new Set<string>();
 
       // Obtener cliente una sola vez para eficiencia
@@ -535,11 +553,19 @@ export class UpdateDataController {
 
       // Procesar para cada club
       for (const clubId of clubIds) {
-        const club = await this.clubRepository.findOne({ where: { id: clubId } });
+        const club = await this.clubRepository.findOne({
+          where: { id: clubId },
+          relations: ['clubTranslation'],
+        });
         if (!club) {
           console.warn(`Club ID ${clubId} not found during import`);
           continue;
         }
+
+        const translation =
+          club.clubTranslation?.find(item => item.locale === 'es') ||
+          club.clubTranslation?.[0];
+        const clubDisplayName = translation?.title || `Club ${club.id}`;
         
         
         // Procesar archivo Excel inmediatamente
@@ -553,30 +579,71 @@ export class UpdateDataController {
           client,
           // ↓ callback para capturar cada inscripción nueva sin ensuciar processExcelFile
           (user: any) => {
-            newlyEnrolledCourses.add(club.name);
-            if (!recipientsMap.has(user.id)) {
+            newlyEnrolledCourses.add(clubDisplayName);
+            const recipient = recipientsMap.get(user.id);
+
+            if (recipient) {
+              recipient.addedGroups.add(clubDisplayName);
+            } else {
               recipientsMap.set(user.id, {
                 id: user.id,
                 name: user.name,
                 email: user.email,
-            });
+                addedGroups: new Set([clubDisplayName]),
+              });
             }
           }
         ); 
 
-  totalRows += rowsProcessed;
-}
+      totalRows += rowsProcessed;
+    }
 
-const recipients = Array.from(recipientsMap.values());
-const courses = Array.from(newlyEnrolledCourses);
+    const recipients = Array.from(recipientsMap.values()).map(recipient => ({
+      id: recipient.id,
+      name: recipient.name,
+      email: recipient.email,
+      addedGroups: Array.from(recipient.addedGroups),
+    }));
+    const courses = Array.from(newlyEnrolledCourses);
 
-return {
-  success: true,
-  message: `Importación completada con éxito. Total de filas procesadas: ${totalRows}`,
-  totalRows,
-  recipients, // 
-  courses,    //
-};
+    const notifications: NotificationResult[] = [];
+
+    for (const recipient of recipients) {
+      try {
+        const mailResult = await this.mailserverService.queueGroupWelcomeMultiple(
+          recipient.email,
+          recipient.name,
+          recipient.addedGroups.length > 0 ? recipient.addedGroups : courses,
+        );
+
+        notifications.push({
+          userId: recipient.id,
+          email: recipient.email,
+          status: 'queued',
+          jobId: mailResult.jobId,
+        });
+      } catch (notificationError) {
+        const errorMessage = notificationError?.message || 'Error desconocido';
+        console.error(
+          `No se pudo enviar la notificación a ${recipient.email}: ${errorMessage}`,
+        );
+        notifications.push({
+          userId: recipient.id,
+          email: recipient.email,
+          status: 'failed',
+          error: errorMessage,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: `Importación completada con éxito. Total de filas procesadas: ${totalRows}`,
+      totalRows,
+      recipients,
+      courses,    //
+      notifications,
+    };
       
     } catch (error) {
       throw new InternalServerErrorException(`Importación fallida: ${error.message}`);
@@ -607,7 +674,13 @@ return {
     onNewEnrollment?: (user: any) => void, 
   ): Promise<number> {
     try {
-      const workbook = xlsx.readFile(file.path);
+     const workbook = file.buffer
+      ? xlsx.read(file.buffer, { type: 'buffer' })
+      : file.path
+        ? xlsx.readFile(file.path)
+        : (() => {
+            throw new BadRequestException('Archivo sin path ni buffer');
+          })();
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const jsonData = xlsx.utils.sheet_to_json(worksheet);
@@ -717,6 +790,7 @@ return {
         'apellido',
         'correo',
         'email',
+        'numero_documento',
         'numero_de_documento',
         'cedula',
         'identification',
@@ -746,7 +820,7 @@ return {
 
       // Definir columnas de identificación y email
       const identificationColumns = [
-        'numero_de_documento', 'numero_de_identificacion', 'número_de_documento', 
+        'numero_documento', 'numero_de_documento', 'numero_de_identificacion', 'número_de_documento',
         'cedula', 'documento', 'identification', 'id_number', 'nombre_de_usuario'
       ];
       
@@ -950,6 +1024,9 @@ return {
         updateData.email = correo || numeroDocumento;
         updateData.client_id = clientId;
         updateData.creator_id = userId;
+        // `users.login_dates` es NOT NULL y no tiene default en la base de datos.
+        // Los usuarios creados desde el Excel deben iniciar con una lista vacía.
+        updateData.login_dates = '[]';
       }
       
       if (Object.keys(updateData).length > 0 || correo || numeroDocumento) {
@@ -988,7 +1065,7 @@ return {
             
             // Asociar club
            // Asociar club (y saber si la inscripción fue nueva)
-            await this.attachUserToClub(user.id, clubId, manager);
+            wasNewEnrollment = await this.attachUserToClub(user.id, clubId, manager);
 
             // Asociar a clubes públicos
             // await this.attachPublicClubs(user.id, manager);
@@ -1061,12 +1138,51 @@ return {
     `, [userId, customFieldId, value]);
   }
 
-  private async attachUserToClub(userId: number, clubId: number, manager: any) {
-  console.log(`Se agrega usuario: ${userId} al curso/club ${clubId}`);
-    await manager.query(`
-      INSERT IGNORE INTO club_user (user_id, club_id, created_at, updated_at) 
-      VALUES (?, ?, NOW(), NOW())
-    `, [userId, clubId]);
+  private async attachUserToClub(
+    userId: number,
+    clubId: number,
+    manager: any,
+  ): Promise<boolean> {
+    console.log(`Se agrega usuario: ${userId} al curso/club ${clubId}`);
+
+    const existingRelations = await manager.query(
+      `
+        SELECT id, deleted_at
+        FROM club_user
+        WHERE user_id = ? AND club_id = ?
+        ORDER BY id ASC
+        LIMIT 1
+      `,
+      [userId, clubId],
+    );
+
+    if (existingRelations.length > 0) {
+      const existingRelation = existingRelations[0];
+
+      if (existingRelation.deleted_at) {
+        await manager.query(
+          `
+            UPDATE club_user
+            SET deleted_at = NULL, updated_at = NOW()
+            WHERE id = ?
+          `,
+          [existingRelation.id],
+        );
+        return true;
+      }
+
+      return false;
+    }
+
+    await manager.query(
+      `
+        INSERT INTO club_user (user_id, club_id, created_at, updated_at)
+        VALUES (?, ?, NOW(), NOW())
+      `,
+      [userId, clubId],
+    );
+
+    return true;
   }
 
   // private async attachPublicClubs(userId: number, manager: any) {

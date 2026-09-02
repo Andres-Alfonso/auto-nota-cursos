@@ -27,6 +27,11 @@ export class User {
   @Column()
   password: string;
 
+  // La base de datos exige este campo para los usuarios nuevos.
+  // Se almacena como JSON en texto y comienza sin registros de inicio de sesión.
+  @Column({ name: 'login_dates', type: 'text' })
+  login_dates: string;
+
   @Column({ nullable: true })
   company: string;
 

@@ -13,6 +13,7 @@ import { Client } from 'src/reports_v2/entities/client.entity';
 import { CustomField } from 'src/reports_v2/entities/custom-field.entity';
 import { CustomFieldOption } from 'src/reports_v2/entities/custom-field-option.entity';
 import { UserCustomField } from 'src/reports_v2/entities/user-custom-field.entity';
+import { MailserverService } from '../mailserver/mailserver.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Club, ClubUser, Client, CustomField, CustomFieldOption, UserCustomField]),
@@ -30,7 +31,7 @@ import { UserCustomField } from 'src/reports_v2/entities/user-custom-field.entit
     }),
   ],
   controllers: [UpdateDataController],
-  providers: [UpdateDataService],
+  providers: [UpdateDataService, MailserverService],
   exports: [TypeOrmModule]
 })
 export class UpdateDataModule {}
