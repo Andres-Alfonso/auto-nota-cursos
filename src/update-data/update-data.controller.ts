@@ -675,7 +675,7 @@ export class UpdateDataController {
   ): Promise<number> {
     try {
      const workbook = file.buffer
-      ? xlsx.read(file.buffer, { type: 'buffer' })
+      ? xlsx.read(file.buffer, { type: 'buffer' , cellDates: true })
       : file.path
         ? xlsx.readFile(file.path)
         : (() => {
@@ -683,8 +683,8 @@ export class UpdateDataController {
           })();
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
-      const jsonData = xlsx.utils.sheet_to_json(worksheet);
-      
+      const jsonData = xlsx.utils.sheet_to_json(worksheet, { defval: null, raw: false });
+
       let successCount = 0;
       let errorCount = 0;
       const errors: any[] = [];
@@ -1158,89 +1158,199 @@ export class UpdateDataController {
     return rawValue;
   }
 
-  private async processUserCustomFields(
-    user: any,
-    row: any,
-    customFields: any[],
-    manager: any,
+  private normalizeExcelDate(value: unknown): string | null {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return null;
+    }
+
+    return this.formatDateParts(
+      value.getUTCFullYear(),
+      value.getUTCMonth() + 1,
+      value.getUTCDate(),
+    );
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return this.excelSerialToDate(value);
+  }
+
+  const text = String(value).trim();
+
+  // Formato ISO: YYYY-MM-DD
+  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+
+  if (isoMatch) {
+    return this.formatDateParts(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3]),
+    );
+  }
+
+  // Formato esperado: DD/MM/YYYY o DD-MM-YYYY
+  const dmyMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
+
+  if (dmyMatch) {
+    return this.formatDateParts(
+      Number(dmyMatch[3]),
+      Number(dmyMatch[2]),
+      Number(dmyMatch[1]),
+    );
+  }
+
+  // Por si Excel entrega el serial como texto
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    return this.excelSerialToDate(Number(text));
+  }
+
+  return null;
+}
+
+private excelSerialToDate(serial: number): string | null {
+  const wholeDays = Math.floor(serial);
+
+  if (wholeDays <= 0 || wholeDays === 60) {
+    return null;
+  }
+
+  // Sistema de fechas 1900 de Excel.
+  // Se descuenta un día desde el serial 60 por el año bisiesto ficticio de Excel.
+  const adjustedDays = wholeDays >= 60
+    ? wholeDays - 1
+    : wholeDays;
+
+  const excelEpoch = Date.UTC(1899, 11, 31);
+  const date = new Date(
+    excelEpoch + adjustedDays * 24 * 60 * 60 * 1000,
+  );
+
+  return this.formatDateParts(
+    date.getUTCFullYear(),
+    date.getUTCMonth() + 1,
+    date.getUTCDate(),
+  );
+}
+
+private formatDateParts(
+  year: number,
+  month: number,
+  day: number,
+): string | null {
+  if (
+    year < 1000 ||
+    year > 9999 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
   ) {
-    // Según los registros mostrados, estos son los campos de fecha
-    const dateFieldIds = new Set([34, 35, 36]);
+    return null;
+  }
 
-    for (const customField of customFields) {
-      const fieldKey = customField.name
-        .toLowerCase()
-        .replace(/ /g, '_');
+  const date = new Date(Date.UTC(year, month - 1, day));
 
-      const matchingRowKey = Object.keys(row).find(
-        key =>
-          key.toLowerCase().replace(/ /g, '_') === fieldKey,
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  const pad = (value: number) => String(value).padStart(2, '0');
+
+  return `${pad(day)}/${pad(month)}/${year}`;
+}
+
+  private async processUserCustomFields(
+  user: any,
+  row: any,
+  customFields: any[],
+  manager: any,
+) {
+  const dateFieldIds = new Set([34, 35, 36]);
+
+  for (const customField of customFields) {
+    const fieldKey = customField.name
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+
+    const matchingRowKey = Object.keys(row).find(
+      key =>
+        key.toLowerCase().replace(/\s+/g, '_') === fieldKey,
+    );
+
+    if (!matchingRowKey) {
+      continue;
+    }
+
+    const rawValue = row[matchingRowKey];
+
+    if (
+      rawValue === null ||
+      rawValue === undefined ||
+      (typeof rawValue === 'string' && rawValue.trim() === '')
+    ) {
+      continue;
+    }
+
+    const isDateField = dateFieldIds.has(Number(customField.id));
+
+    if (isDateField) {
+      const formattedDate = this.normalizeExcelDate(rawValue);
+
+      if (!formattedDate) {
+        console.log(
+          `Fecha inválida para el campo "${customField.name}": ${rawValue}`,
+        );
+        continue;
+      }
+
+      await this.saveUserCustomField(
+        user.id,
+        customField.id,
+        formattedDate,
+        manager,
       );
 
-      if (!matchingRowKey) {
-        continue;
-      }
+      continue;
+    }
 
-      const rawValue = row[matchingRowKey];
+    const fieldValue = String(rawValue).trim();
 
-      if (
-        rawValue === null ||
-        rawValue === undefined ||
-        String(rawValue).trim() === ''
-      ) {
-        continue;
-      }
+    switch (customField.fieldType) {
+      case 'select': {
+        const matchingOption = customField.options?.find(
+          option =>
+            option.optionValue.toLowerCase() === fieldValue.toLowerCase(),
+        );
 
-      const fieldValue = String(rawValue).trim();
-
-      switch (customField.fieldType) {
-        case 'select': {
-          const matchingOption = customField.options.find(
-            option =>
-              option.optionValue.toLowerCase() === fieldValue.toLowerCase(),
-          );
-
-          if (matchingOption) {
-            await this.saveUserCustomField(
-              user.id,
-              customField.id,
-              matchingOption.id,
-              manager,
-            );
-          }
-
-          break;
-        }
-
-        case 'text':
-        case 'textarea': {
-          const valueToSave = dateFieldIds.has(Number(customField.id))
-            ? this.normalizeDate(rawValue)
-            : fieldValue;
-
+        if (matchingOption) {
           await this.saveUserCustomField(
             user.id,
             customField.id,
-            valueToSave,
+            matchingOption.id,
             manager,
           );
-
-          break;
         }
 
-        default: {
-          await this.saveUserCustomField(
-            user.id,
-            customField.id,
-            fieldValue,
-            manager,
-          );
+        break;
+      }
 
-          break;
-        }
+      default: {
+        await this.saveUserCustomField(
+          user.id,
+          customField.id,
+          fieldValue,
+          manager,
+        );
+
+        break;
       }
     }
   }
+}
 
   private async saveUserCustomField(userId: number, customFieldId: number, value: any, manager: any) {
     await manager.query(`
