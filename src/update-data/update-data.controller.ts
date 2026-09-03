@@ -1090,7 +1090,26 @@ export class UpdateDataController {
       return { success: false, error: `Error general: ${generalError.message}`, user: null };
     }
   }
+  private isValidDateDDMMYYYY(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
 
+    const match = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return false;
+
+    const [, dayValue, monthValue, yearValue] = match;
+
+    const day = Number(dayValue);
+    const month = Number(monthValue);
+    const year = Number(yearValue);
+
+    const date = new Date(year, month - 1, day);
+
+    return (
+      date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+    );
+  }
   private async processUserCustomFields(user: any, row: any, customFields: any[], manager: any) {
     for (const customField of customFields) {
       const fieldKey = customField.name.toLowerCase().replace(/ /g, '_');
@@ -1115,14 +1134,29 @@ export class UpdateDataController {
             break;
             
           case 'text':
-            await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
-            break;
           case 'textarea':
-            await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
+            if (this.isValidDateDDMMYYYY(fieldValue)) {
+              console.log('El texto es una fecha válida');
+            } else {
+              console.log('El texto no es una fecha válida');
+            }
+
+            await this.saveUserCustomField(
+              user.id,
+              customField.id,
+              fieldValue,
+              manager,
+            );
             break;
+
           default:
             if (fieldValue) {
-              await this.saveUserCustomField(user.id, customField.id, fieldValue, manager);
+              await this.saveUserCustomField(
+                user.id,
+                customField.id,
+                fieldValue,
+                manager,
+              );
             }
             break;
         }
