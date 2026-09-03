@@ -1112,108 +1112,131 @@ export class UpdateDataController {
   }
 
   private normalizeDate(value: unknown): string {
-    if (value === null || value === undefined) {
-      return '';
+    const rawValue = String(value ?? '').trim();
+
+    // Fecha serial de Excel
+    if (/^\d+(\.\d+)?$/.test(rawValue)) {
+      const serial = Number(rawValue);
+
+      if (serial > 1000) {
+        const date = new Date(
+          Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000,
+        );
+
+        return [
+          String(date.getUTCDate()).padStart(2, '0'),
+          String(date.getUTCMonth() + 1).padStart(2, '0'),
+          date.getUTCFullYear(),
+        ].join('/');
+      }
     }
 
-    const raw = String(value).trim();
+    // Fecha YYYY-MM-DD
+    const isoMatch = rawValue.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
 
-    let day: number;
-    let month: number;
-    let year: number;
+    if (isoMatch) {
+      return `${isoMatch[3].padStart(2, '0')}/${isoMatch[2].padStart(2, '0')}/${isoMatch[1]}`;
+    }
 
-    // Formato YYYY-MM-DD, común en input type="date"
-    let match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    // Fecha DD/MM/YYYY o MM/DD/YYYY
+    const dateMatch = rawValue.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
 
-    if (match) {
-      year = Number(match[1]);
-      month = Number(match[2]);
-      day = Number(match[3]);
-    } else {
-      // Formato DD/MM/YYYY o MM/DD/YYYY
-      match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (dateMatch) {
+      const first = Number(dateMatch[1]);
+      const second = Number(dateMatch[2]);
+      const year = dateMatch[3];
 
-      if (!match) {
-        return raw;
-      }
-
-      const first = Number(match[1]);
-      const second = Number(match[2]);
-      year = Number(match[3]);
-
-      // Detecta valores como 8/31/2026
+      // Ejemplo: 8/31/2026
       if (second > 12) {
-        month = first;
-        day = second;
-      } else {
-        // Por defecto asume DD/MM/YYYY
-        day = first;
-        month = second;
+        return `${String(second).padStart(2, '0')}/${String(first).padStart(2, '0')}/${year}`;
       }
+
+      // Por defecto: DD/MM/YYYY
+      return `${String(first).padStart(2, '0')}/${String(second).padStart(2, '0')}/${year}`;
     }
 
-    const date = new Date(year, month - 1, day);
-
-    if (
-      date.getFullYear() !== year ||
-      date.getMonth() !== month - 1 ||
-      date.getDate() !== day
-    ) {
-      throw new Error(`Fecha inválida: ${raw}`);
-    }
-
-    return [
-      String(day).padStart(2, '0'),
-      String(month).padStart(2, '0'),
-      year,
-    ].join('/');
+    return rawValue;
   }
 
-  private async processUserCustomFields(user: any, row: any, customFields: any[], manager: any) {
-    for (const customField of customFields) {
-      const fieldKey = customField.name.toLowerCase().replace(/ /g, '_');
-      
-      // Buscar clave coincidente en la fila
-      const matchingRowKey = Object.keys(row).find(key => 
-        key.toLowerCase().replace(/ /g, '_') === fieldKey
-      );
-      
-      if (matchingRowKey && row[matchingRowKey] && String(row[matchingRowKey]).trim() !== '') {
-        const fieldValue = String(row[matchingRowKey]).trim();
-        
-        switch (customField.fieldType) {
-          case 'select':
-            const matchingOption = customField.options.find(option => 
-              option.optionValue.toLowerCase() === fieldValue.toLowerCase()
-            );
-            
-            if (matchingOption) {
-              await this.saveUserCustomField(user.id, customField.id, matchingOption.id, manager);
-            }
-            break;
-            
-          case 'text':
-          case 'textarea':
-            const valueToSave = this.normalizeDate(fieldValue);
+  private async processUserCustomFields(
+    user: any,
+    row: any,
+    customFields: any[],
+    manager: any,
+  ) {
+    // Según los registros mostrados, estos son los campos de fecha
+    const dateFieldIds = new Set([34, 35, 36]);
 
+    for (const customField of customFields) {
+      const fieldKey = customField.name
+        .toLowerCase()
+        .replace(/ /g, '_');
+
+      const matchingRowKey = Object.keys(row).find(
+        key =>
+          key.toLowerCase().replace(/ /g, '_') === fieldKey,
+      );
+
+      if (!matchingRowKey) {
+        continue;
+      }
+
+      const rawValue = row[matchingRowKey];
+
+      if (
+        rawValue === null ||
+        rawValue === undefined ||
+        String(rawValue).trim() === ''
+      ) {
+        continue;
+      }
+
+      const fieldValue = String(rawValue).trim();
+
+      switch (customField.fieldType) {
+        case 'select': {
+          const matchingOption = customField.options.find(
+            option =>
+              option.optionValue.toLowerCase() === fieldValue.toLowerCase(),
+          );
+
+          if (matchingOption) {
             await this.saveUserCustomField(
               user.id,
               customField.id,
-              valueToSave,
+              matchingOption.id,
               manager,
             );
-            break;
+          }
 
-          default:
-            if (fieldValue) {
-              await this.saveUserCustomField(
-                user.id,
-                customField.id,
-                fieldValue,
-                manager,
-              );
-            }
-            break;
+          break;
+        }
+
+        case 'text':
+        case 'textarea': {
+          const valueToSave = dateFieldIds.has(Number(customField.id))
+            ? this.normalizeDate(rawValue)
+            : fieldValue;
+
+          await this.saveUserCustomField(
+            user.id,
+            customField.id,
+            valueToSave,
+            manager,
+          );
+
+          break;
+        }
+
+        default: {
+          await this.saveUserCustomField(
+            user.id,
+            customField.id,
+            fieldValue,
+            manager,
+          );
+
+          break;
         }
       }
     }
