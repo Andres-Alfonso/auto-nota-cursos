@@ -1158,54 +1158,126 @@ export class UpdateDataController {
     return rawValue;
   }
 
+  // private normalizeExcelDate(value: unknown): string | null {
+  //   if (value instanceof Date) {
+  //     if (Number.isNaN(value.getTime())) {
+  //       return null;
+  //     }
+
+  //     return this.formatDateParts(
+  //       value.getUTCFullYear(),
+  //       value.getUTCMonth() + 1,
+  //       value.getUTCDate(),
+  //     );
+  //   }
+
+  //   if (typeof value === 'number' && Number.isFinite(value)) {
+  //     return this.excelSerialToDate(value);
+  //   }
+
+  //   const text = String(value).trim();
+
+  //   // Formato ISO: YYYY-MM-DD
+  //   const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+
+  //   if (isoMatch) {
+  //     return this.formatDateParts(
+  //       Number(isoMatch[1]),
+  //       Number(isoMatch[2]),
+  //       Number(isoMatch[3]),
+  //     );
+  //   }
+
+  //   // Formato esperado: DD/MM/YYYY o DD-MM-YYYY
+  //   const dmyMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
+
+  //   if (dmyMatch) {
+  //     return this.formatDateParts(
+  //       Number(dmyMatch[3]),
+  //       Number(dmyMatch[2]),
+  //       Number(dmyMatch[1]),
+  //     );
+  //   }
+
+  //   // Por si Excel entrega el serial como texto
+  //   if (/^\d+(\.\d+)?$/.test(text)) {
+  //     return this.excelSerialToDate(Number(text));
+  //   }
+
+  //   return null;
+  // }
+
   private normalizeExcelDate(value: unknown): string | null {
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) {
-      return null;
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) {
+        return null;
+      }
+
+      return this.formatDateParts(
+        value.getUTCFullYear(),
+        value.getUTCMonth() + 1,
+        value.getUTCDate(),
+      );
     }
 
-    return this.formatDateParts(
-      value.getUTCFullYear(),
-      value.getUTCMonth() + 1,
-      value.getUTCDate(),
-    );
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return this.excelSerialToDate(value);
+    }
+
+    const text = String(value).trim();
+
+    // Excel entrega textos como M/D/YY o M/D/YYYY
+    const excelTextMatch =
+      /^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/.exec(text);
+
+    if (excelTextMatch) {
+      const month = Number(excelTextMatch[1]);
+      const day = Number(excelTextMatch[2]);
+      const year = this.normalizeYear(excelTextMatch[3]);
+
+      const formattedDate = this.formatDateParts(year, month, day);
+
+      if (formattedDate) {
+        return formattedDate;
+      }
+    }
+
+    // Soporte para ISO: YYYY-MM-DD
+    const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+
+    if (isoMatch) {
+      return this.formatDateParts(
+        Number(isoMatch[1]),
+        Number(isoMatch[2]),
+        Number(isoMatch[3]),
+      );
+    }
+
+    // Soporte adicional para DD/MM/YYYY
+    const dmyMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
+
+    if (dmyMatch) {
+      return this.formatDateParts(
+        Number(dmyMatch[3]),
+        Number(dmyMatch[2]),
+        Number(dmyMatch[1]),
+      );
+    }
+
+    return null;
   }
 
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return this.excelSerialToDate(value);
+  private normalizeYear(year: string): number {
+    const numericYear = Number(year);
+
+    if (year.length === 4) {
+      return numericYear;
+    }
+
+    return numericYear <= 29
+      ? 2000 + numericYear
+      : 1900 + numericYear;
   }
-
-  const text = String(value).trim();
-
-  // Formato ISO: YYYY-MM-DD
-  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
-
-  if (isoMatch) {
-    return this.formatDateParts(
-      Number(isoMatch[1]),
-      Number(isoMatch[2]),
-      Number(isoMatch[3]),
-    );
-  }
-
-  // Formato esperado: DD/MM/YYYY o DD-MM-YYYY
-  const dmyMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
-
-  if (dmyMatch) {
-    return this.formatDateParts(
-      Number(dmyMatch[3]),
-      Number(dmyMatch[2]),
-      Number(dmyMatch[1]),
-    );
-  }
-
-  // Por si Excel entrega el serial como texto
-  if (/^\d+(\.\d+)?$/.test(text)) {
-    return this.excelSerialToDate(Number(text));
-  }
-
-  return null;
-}
 
 private excelSerialToDate(serial: number): string | null {
   const wholeDays = Math.floor(serial);
