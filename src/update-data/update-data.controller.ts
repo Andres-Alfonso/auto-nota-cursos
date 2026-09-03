@@ -1110,6 +1110,65 @@ export class UpdateDataController {
       date.getDate() === day
     );
   }
+
+  private normalizeDate(value: unknown): string {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    const raw = String(value).trim();
+
+    let day: number;
+    let month: number;
+    let year: number;
+
+    // Formato YYYY-MM-DD, común en input type="date"
+    let match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
+    if (match) {
+      year = Number(match[1]);
+      month = Number(match[2]);
+      day = Number(match[3]);
+    } else {
+      // Formato DD/MM/YYYY o MM/DD/YYYY
+      match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
+      if (!match) {
+        return raw;
+      }
+
+      const first = Number(match[1]);
+      const second = Number(match[2]);
+      year = Number(match[3]);
+
+      // Detecta valores como 8/31/2026
+      if (second > 12) {
+        month = first;
+        day = second;
+      } else {
+        // Por defecto asume DD/MM/YYYY
+        day = first;
+        month = second;
+      }
+    }
+
+    const date = new Date(year, month - 1, day);
+
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      throw new Error(`Fecha inválida: ${raw}`);
+    }
+
+    return [
+      String(day).padStart(2, '0'),
+      String(month).padStart(2, '0'),
+      year,
+    ].join('/');
+  }
+
   private async processUserCustomFields(user: any, row: any, customFields: any[], manager: any) {
     for (const customField of customFields) {
       const fieldKey = customField.name.toLowerCase().replace(/ /g, '_');
@@ -1135,16 +1194,12 @@ export class UpdateDataController {
             
           case 'text':
           case 'textarea':
-            if (this.isValidDateDDMMYYYY(fieldValue)) {
-              console.log('El texto es una fecha válida');
-            } else {
-              console.log('El texto no es una fecha válida');
-            }
+            const valueToSave = this.normalizeDate(fieldValue);
 
             await this.saveUserCustomField(
               user.id,
               customField.id,
-              fieldValue,
+              valueToSave,
               manager,
             );
             break;
